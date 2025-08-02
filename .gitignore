@@ -1,1 +1,19 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+neurosync_new/
+*.egg-info/
+.pytest_cache/
+*.log
+
+# Model files
 utils_local_api/model/model.pth
+
+# Other
+.vscode/
+*.DS_Store
