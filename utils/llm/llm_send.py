@@ -4,11 +4,13 @@ from queue import Queue
 from openai import OpenAI
 from utils.llm.llm_utils import *
 from utils.llm.text_utils import *
+from utils.llm.chat_list_manager import get_file_name, get_all_chat_names
 from utils.utils import init_api_key
 import os
 import io
 import asyncio
 import time
+import json
 
 
 
@@ -16,7 +18,12 @@ class LLMChat():
     def __init__(self):
         self.history = []
         self.on_streaming = True
-        self.system_prompt=load_text(r"E:\Unreal Projects\lipsync_neurosync\unrealversion\config_files\sys_prompt.txt")
+        # ✅ 动态加载系统提示词：从项目根目录的 config_files/sys_prompt.txt
+        root_dir = resolve_path(os.path.join(os.path.dirname(__file__), "..", ".."))
+        sys_prompt_path = os.path.join(root_dir, "config_files", "sys_prompt.txt")
+        self.system_prompt = load_text(sys_prompt_path) if os.path.exists(sys_prompt_path) else ""
+        if not self.system_prompt:
+            print(f"⚠️ 警告：无法从 {sys_prompt_path} 加载系统提示词，使用空字符串")
         self.llm_url = "https://api.tu-zi.com/v1"
         self.llm_key = init_api_key(env_name="tuzi_api_key", input_api_key="your llm api key")
         self.seed = 42
@@ -34,7 +41,11 @@ class LLMChat():
         path, local_history = load_history(chatname)
         self.history = local_history
         self.history.append({'role': 'user', 'content': prompt})
-        messages = [{'role': 'system', 'content': self.system_prompt}]
+        
+        # ✅ 生成带有记忆片段的系统提示词
+        system_prompt_with_memory = get_system_prompt_with_memory(chatname, self.system_prompt)
+        
+        messages = [{'role': 'system', 'content': system_prompt_with_memory}]
         messages.extend(self.history)
         last_chunk = time.time()
         # 模拟远程调用，流式返回数据
@@ -56,6 +67,11 @@ class LLMChat():
                 print("Stop signal received, LLM client closed")
                 self.on_streaming=True
                 break
+            
+            # ✅ [FIX] 安全检查：确保 choices 存在且不为空
+            if not event.choices:
+                continue
+                
             content = event.choices[0].delta.content or ""
             chunk_dur =time.time()-last_chunk
             yield content  # 返回流式内容
@@ -105,29 +121,73 @@ class LLMChat():
 
         # 这个类将替代您的原始 LLMChat 类
 
-chat_list = {
-    "defult" :"defult",
-    "吉他教室": "guitar",
-    "语言教室": "japanese",
-    "职业规划": "career",
-    "xxxooo": "xxxooo",
-    "闲聊": "small_talk",  
-}
 
 def load_history(chatname):
-    file_name = chat_list.get(chatname)
+    """
+    Load dialogue history for a given chat name
+    
+    Args:
+        chatname: The display name of the chat
+    
+    Returns:
+        tuple: (path, history_list)
+    """
+    # ✅ 动态从 chat_list.json 获取文件名
+    file_name = get_file_name(chatname)
+    if not file_name:
+        print(f"⚠️ 未找到聊天名称: {chatname}")
+        return "", []
+    
     chat_path = os.path.join("dialogue_histories", f"{file_name}.txt")
     path = resolve_path(chat_path)
     print(path)
-    history = load_text(r"{}".format(path))
-    # 解析 JSON 字符串
-    history = json.loads(history)
-    return path, history
+    
+    try:
+        history_text = load_text(r"{}".format(path))
+        
+        # 处理空文件或空字符串
+        if not history_text or history_text.strip() == "":
+            print(f"⚠️ 历史文件为空或不存在: {path}")
+            return path, []
+        
+        # 解析 JSON 字符串
+        history = json.loads(history_text)
+        
+        # 确保返回的是列表
+        if not isinstance(history, list):
+            print(f"⚠️ 历史记录不是列表格式，重置为空列表")
+            return path, []
+        
+        return path, history
+        
+    except json.JSONDecodeError as e:
+        print(f"⚠️ JSON 解析失败: {e}，初始化为空列表")
+        return path, []
+    except Exception as e:
+        print(f"❌ 加载历史记录失败: {e}，初始化为空列表")
+        return path, []
+
 
 def save_history(chatname, history):
-    file_name = chat_list.get(chatname)
+    """
+    Save dialogue history for a given chat name
+    
+    Args:
+        chatname: The display name of the chat
+        history: The history list to save
+    
+    Returns:
+        str: Success message
+    """
+    # ✅ 动态从 chat_list.json 获取文件名
+    file_name = get_file_name(chatname)
+    if not file_name:
+        print(f"❌ 无法保存：未找到聊天名称 {chatname}")
+        return "error"
+    
     chat_path = os.path.join("dialogue_histories", f"{file_name}.txt")
     path = resolve_path(chat_path)
+    
     # 将 history 转为 JSON 字符串并写入文件
     with open(path, 'w', encoding='utf-8') as f:
         json.dump(history, f, ensure_ascii=False, indent=4)
@@ -135,14 +195,16 @@ def save_history(chatname, history):
     return "saved history"
 
 def process_for_tts(text_list):
-    # 定义允许的标点符号：中文和英文的标点
-    allowed_punctuation = r'[，。！？：；“”""\'\'\n]'
-
-    # 过滤掉不需要发音的特殊字符和空格
+    """
+    处理文本列表以供 TTS 使用。
+    对每个句子进行清理，移除 Markdown、推理标签等格式化符号。
+    """
     cleaned_text = []
     
     for sentence in text_list:
-        # 去除不需要的特殊字符（例如 *, #, @ 等）和空格
-        sentence = re.sub(r'[^a-zA-Z0-9' + allowed_punctuation + r']|\s+', '', sentence)
-        cleaned_text.append(sentence)   
+        # 使用 clean_for_tts 进行全面清理
+        cleaned_sentence = clean_for_tts(sentence)
+        if cleaned_sentence:  # 只添加非空的句子
+            cleaned_text.append(cleaned_sentence)
+    
     return cleaned_text

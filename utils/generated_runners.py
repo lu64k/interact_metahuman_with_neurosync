@@ -17,7 +17,13 @@ from livelink.animations.animation_loader import emotion_animations
 
 queue_lock = Lock()
 
-def run_audio_animation(audio_input, generated_facial_data, py_face, socket_connection, default_animation_thread):
+def run_audio_animation(audio_input, generated_facial_data, py_face, socket_connection, default_animation_thread, stop_flag_getter=None):
+    """
+    运行音频动画
+    
+    Args:
+        stop_flag_getter: Optional callable that returns True if playback should be interrupted
+    """
     #print(f"输入数据检查: generated_facial_data 类型: {type(generated_facial_data)}, 长度: {len(generated_facial_data) if generated_facial_data is not None else 'None'}")
     
     if (generated_facial_data is not None and 
@@ -60,13 +66,13 @@ def run_audio_animation(audio_input, generated_facial_data, py_face, socket_conn
     start_event = Event()
 
     if isinstance(audio_input, bytes):       
-        audio_thread = Thread(target=play_audio_from_memory, args=(audio_input, start_event))
+        audio_thread = Thread(target=play_audio_from_memory, args=(audio_input, start_event, False, stop_flag_getter))
         print("播放完毕")
     elif isinstance(audio_input, io.BytesIO):
         try:
             print("处理BytesIO音频输入")
             files = audio_input.getvalue()
-            audio_thread = Thread(target=play_audio_from_memory, args=(files, start_event))
+            audio_thread = Thread(target=play_audio_from_memory, args=(files, start_event, False, stop_flag_getter))
         except Exception as e:
             print(f"捕获音频时出错: {e}")           
     else:
@@ -74,7 +80,7 @@ def run_audio_animation(audio_input, generated_facial_data, py_face, socket_conn
         audio_thread = Thread(target=play_audio_from_path, args=(audio_input, start_event))
     #print("成功捕获语音")
 
-    data_thread = Thread(target=send_pre_encoded_data_to_unreal, args=(encoded_facial_data, start_event, 60, socket_connection))
+    data_thread = Thread(target=send_pre_encoded_data_to_unreal, args=(encoded_facial_data, start_event, 60, socket_connection, stop_flag_getter))
     #print("数据线程已创建")
 
     audio_thread.start()
@@ -86,6 +92,21 @@ def run_audio_animation(audio_input, generated_facial_data, py_face, socket_conn
     audio_thread.join()
     data_thread.join()
     #print("音频和数据线程已完成")
+    
+    # ✅ 确保音频完全播放完毕后再返回
+    # 虽然 audio_thread.join() 已经等待了，但为了保险起见，可以再检查一下 mixer 状态
+    try:
+        import pygame
+        while pygame.mixer.get_init() and pygame.mixer.music.get_busy():
+            # 如果还在播放（可能是因为 data_thread 结束得比 audio_thread 早），继续等待
+            # 但要注意 stop_flag
+            if stop_flag_getter and stop_flag_getter():
+                pygame.mixer.music.stop()
+                break
+            import time
+            time.sleep(0.05)
+    except:
+        pass
 
     with queue_lock:
         stop_default_animation.clear()

@@ -1,5 +1,5 @@
 from datetime import datetime
-import dashscope
+# import dashscope
 import os
 
 def init_api_key(env_name = 'DASHSCOPE_API_KEY', input_api_key = "输入你的api"):

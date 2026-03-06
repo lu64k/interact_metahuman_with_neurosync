@@ -40,13 +40,26 @@ def sync_playback_loop():
         clock.tick(10)
 
 
-def simple_playback_loop():
+def simple_playback_loop(stop_flag_getter=None):
     """
     A simple playback loop that just ticks the clock until playback finishes.
+    
+    Args:
+        stop_flag_getter: Optional callable that returns True if playback should be interrupted
     """
     clock = pygame.time.Clock()
     while pygame.mixer.music.get_busy():
+        # ✅ 检查是否需要打断
+        if stop_flag_getter and stop_flag_getter():
+            print("🛑 [播放中断] 检测到打断信号，立即停止音频")
+            pygame.mixer.music.stop()
+            break
         clock.tick(10)
+    
+    # ✅ 确保音频完全停止后再返回
+    # 有时候 get_busy() 返回 False 但音频缓冲区还没完全清空
+    # 增加一个小延迟确保下一句不会重叠
+    time.sleep(0.1)
 
 
 # --- Playback Functions ---
@@ -74,10 +87,16 @@ def play_audio_bytes(audio_bytes, start_event, sync=True):
         print(f"Error in play_audio_bytes: {e}")
 
 
-def play_audio_from_memory(audio_data, start_event, sync=False):
+def play_audio_from_memory(audio_data, start_event, sync=False, stop_flag_getter=None):
     """
     Play audio from memory (assumes valid WAV bytes).
     Uses a simple playback loop.
+    
+    Args:
+        audio_data: Audio bytes in WAV format
+        start_event: Event to wait for before starting playback
+        sync: Whether to use sync playback (default False)
+        stop_flag_getter: Optional callable that returns True if playback should be interrupted
     """
     try:
         init_pygame_mixer()
@@ -85,7 +104,7 @@ def play_audio_from_memory(audio_data, start_event, sync=False):
         pygame.mixer.music.load(audio_file)
         start_event.wait()
         pygame.mixer.music.play()
-        simple_playback_loop()
+        simple_playback_loop(stop_flag_getter)
     except pygame.error as e:
         if "Unknown WAVE format" in str(e):
             print("Unknown WAVE format encountered. Skipping to the next item in the queue.")

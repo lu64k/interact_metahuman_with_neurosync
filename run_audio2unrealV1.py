@@ -4,6 +4,7 @@
 from utils.utils import init_api_key, get_timestamp
 from utils.llm.text_utils import *
 from utils.llm.llm_send import load_history
+from utils.llm.chat_list_manager import get_all_chat_names
 from utils.stt_llm_tts import Run_LLM_To_Anim
 from utils.stt.Ali_voicer_rc import *
 audio_que=Run_LLM_To_Anim()
@@ -169,14 +170,7 @@ def record_and_recognize(if_end: bool, llm_model, chatname):  # 录音线程，�
             continue
 
 
-chat_list = {
-    "defult" :"defult",
-    "吉他教室": "guitar",
-    "语言教室": "japanese",
-    "职业规划": "career",
-    "xxxooo": "xxxooo",
-    "闲聊": "small_talk",  
-}
+# ✅ 动态从 chat_list.json 加载 - 不再硬编码
 
 #=================================== Gradio ========================================== 
 # Gradio 界面#
@@ -192,6 +186,13 @@ async def auto_load_history(chatname, status, chatbot):
 
 
 import gradio as gr
+
+# ✅ 动态获取对话列表
+def get_chat_choices():
+    """Get current chat choices from chat_list.json"""
+    chats = get_all_chat_names()
+    return chats if chats else ["default"]
+
 with gr.Blocks() as demo:
     gr.Markdown("# 语音+LLM 聊天机器人")
     with gr.Row():
@@ -202,7 +203,9 @@ with gr.Blocks() as demo:
             text_input = gr.Textbox(label="输入或录音结果", placeholder="说点啥...")
             send_btn = gr.Button("🚀 发送")
             update_btn = gr.Button("更新对话历史")
-    chats = gr.Dropdown(choices=list(chat_list.keys()), label="选择对话", value=list(chat_list.keys())[0])
+    # ✅ 使用动态加载的对话列表
+    chat_choices = get_chat_choices()
+    chats = gr.Dropdown(choices=chat_choices, label="选择对话", value=chat_choices[0] if chat_choices else "default")
     chatbot = gr.Chatbot( type="messages", label="对话")
     status = gr. Textbox(label="unreal请求情况")
     with gr.Accordion("LLM 设置", open=False):

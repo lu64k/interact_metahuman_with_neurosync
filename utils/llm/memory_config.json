@@ -1,0 +1,8 @@
+{
+    "summary_model": "deepseek-chat",
+    "summary_base_url": "https://api.deepseek.com",
+    "summary_api_key_env": "DEEPSEEK_API_KEY",
+    "max_history_length": 30,
+    "retain_history_length": 5,
+    "max_memory_fragments": 100
+}

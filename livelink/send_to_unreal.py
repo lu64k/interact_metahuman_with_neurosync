@@ -139,7 +139,13 @@ def smooth_facial_data(facial_data: list) -> list:
     return smoothed_data
 
 
-def send_pre_encoded_data_to_unreal(encoded_facial_data: List[bytes], start_event, fps: int, socket_connection=None):
+def send_pre_encoded_data_to_unreal(encoded_facial_data: List[bytes], start_event, fps: int, socket_connection=None, stop_flag_getter=None):
+    """
+    发送预编码的面部数据到 Unreal
+    
+    Args:
+        stop_flag_getter: Optional callable that returns True if playback should be interrupted
+    """
     try:
         own_socket = False
         if socket_connection is None:
@@ -151,6 +157,11 @@ def send_pre_encoded_data_to_unreal(encoded_facial_data: List[bytes], start_even
         start_time = time.time()  
 
         for frame_index, frame_data in enumerate(encoded_facial_data):
+            # ✅ 检查打断标志
+            if stop_flag_getter and stop_flag_getter():
+                print("🛑 [动画线程] 检测到打断信号，停止发送动画数据")
+                break
+            
             current_time = time.time()
             elapsed_time = current_time - start_time
             expected_time = frame_index * frame_duration 

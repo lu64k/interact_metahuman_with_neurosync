@@ -15,6 +15,7 @@ from utils.audio.convert_audio import pcm_to_wav, audio_to_bytes, convert_to_wav
 from utils.utils import init_api_key
 import os
 import asyncio
+import uuid
 
 
 def call_local_tts(text, voice=None): 
@@ -78,7 +79,7 @@ app = Flask(__name__)
 dashscope.api_key = init_api_key(env_name= 'DASHSCOPE_API_KEY', input_api_key="输入你的api")
 async def synthesize_speech(text):
     if not text:
-        return jsonify({'error': 'No text provided'}), 400
+        return None, None  # ✅ 返回 (audio, request_id)
     try:
         # 使用 Dashscope TTS v2 进行语音合成
         model = "cosyvoice-v2"  # 替换为您使用的模型名称
@@ -87,27 +88,47 @@ async def synthesize_speech(text):
         speech_rate = 1.30
         synthesizer = SpeechSynthesizer(model=model, voice=voice, format=format, speech_rate=speech_rate)
         audio = await asyncio.to_thread (synthesizer.call,text)
-        print('requestId: ', synthesizer.get_last_request_id())
-        #duration = get_audio_length(audio)
-        return audio
+        
+        # ✅ 尝试获取 request_id，如果失败则生成 UUID
+        request_id = None
+        try:
+            request_id = synthesizer.get_last_request_id()
+        except:
+            pass
+            
+        if not request_id:
+            import uuid
+            request_id = str(uuid.uuid4())
+            print(f"⚠️ Warning: Could not get request_id from TTS, generated UUID: {request_id}")
+        else:
+            print('requestId: ', request_id)
+            
+        # ✅ 返回音频和 request_id
+        return audio, request_id
     except Exception as e:
         print(f"TTS synthesis exception: {e}")
-        return jsonify({'error': 'TTS synthesis failed', 'details': str(e)}), 500
+        return None, None
         
 async def call_TTS(output_text):
     if not output_text:
-        return None
+        return None, None  # ✅ 返回 (audio, request_id)
     try:
         print(f"tts received {output_text}")
-        with app.app_context():
-            raw_audio = await synthesize_speech(output_text)  # 已异步，直接await
+        # ✅ [FIX] 移除 app.app_context()，因为我们不在 Flask 请求上下文中运行
+        raw_audio, request_id = await synthesize_speech(output_text)  # ✅ 接收两个返回值
+            
+        # ✅ 再次确保有 request_id
+        if not request_id:
+            import uuid
+            request_id = str(uuid.uuid4())
+            
         if raw_audio:
             print("got audio")
             wav_bytes = await asyncio.to_thread(pcm_to_wav, raw_audio)
-            return wav_bytes.getvalue()
+            return wav_bytes.getvalue(), request_id  # ✅ 返回音频和 request_id
         else:
             print("failed to get audio output")
-            return None
+            return None, None
     except Exception as e:
         print(f"call tts error: {e}")
-        return None
+        return None, None
