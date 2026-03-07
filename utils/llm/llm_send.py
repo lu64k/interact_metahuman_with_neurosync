@@ -66,40 +66,51 @@ class LLMChat():
         full_content = ""
         aborted = False
         # 假设返回的每个 chunk 代表流式数据的一部分
-        for event in completion:
-            if stop_event.is_set() or not self.on_streaming:
-                completion = []
-                client.close()
-                self.buffer_text = ""
-                aborted = True
-                logger.info("Stop signal received, LLM client closed")
-                self.on_streaming=True
-                break
-            
-            # ✅ [FIX] 安全检查：确保 choices 存在且不为空
-            if not event.choices:
-                continue
+        try:
+            for event in completion:
+                if stop_event.is_set() or not self.on_streaming:
+                    completion = []
+                    client.close()
+                    self.buffer_text = ""
+                    aborted = True
+                    logger.info("Stop signal received, LLM client closed")
+                    self.on_streaming=True
+                    break
                 
-            content = event.choices[0].delta.content or ""
-            chunk_dur =time.time()-last_chunk
-            yield content  # 返回流式内容
-            full_content += content
-            #print(f"本段收取用时 {chunk_dur}")
-            last_chunk = time.time()
-        self.last_stream_aborted = aborted
-        if not aborted:
-            self.history.append({'role': 'assistant', 'content': full_content})
-            save_history(chatname, self.history)
-        else:
-            if not skip_history_on_abort:
-                if full_content:
+                # ✅ [FIX] 安全检查：确保 choices 存在且不为空
+                if not event.choices:
+                    continue
+                    
+                content = event.choices[0].delta.content or ""
+                chunk_dur =time.time()-last_chunk
+                full_content += content
+                yield content  # 返回流式内容
+                #print(f"本段收取用时 {chunk_dur}")
+                last_chunk = time.time()
+        except GeneratorExit:
+            # 上层放弃了 generator（如 TTS 中断后 process_llm_to_tts return）
+            # LLM 可能已经完成，full_content 可能是完整的
+            logger.info("[历史] Generator 被上层关闭，进入 finally 保存历史")
+            raise
+        finally:
+            # 无论正常完成、break 中断、还是 GeneratorExit，都保存历史
+            try:
+                self.last_stream_aborted = aborted
+                if not aborted:
                     self.history.append({'role': 'assistant', 'content': full_content})
-                    logger.info("[历史] 请求中断但保留部分历史: chat=%s", chatname)
+                    save_history(chatname, self.history)
                 else:
-                    logger.info("[历史] 请求中断无返回文本，保留用户输入: chat=%s", chatname)
-                save_history(chatname, self.history)
-            else:
-                logger.info("[历史] 请求中断，跳过保存历史: chat=%s", chatname)
+                    if not skip_history_on_abort:
+                        if full_content:
+                            self.history.append({'role': 'assistant', 'content': full_content})
+                            logger.info("[历史] 请求中断但保留部分历史: chat=%s", chatname)
+                        else:
+                            logger.info("[历史] 请求中断无返回文本，保留用户输入: chat=%s", chatname)
+                        save_history(chatname, self.history)
+                    else:
+                        logger.info("[历史] 请求中断，跳过保存历史: chat=%s", chatname)
+            except Exception as e:
+                logger.warning("[历史] finally 保存历史时异常: %s", e)
 
     async def process_streaming_content(self, prompt,llm_model, stop_event, chatname, skip_history_on_abort: bool = True):
         self.on_streaming=True
