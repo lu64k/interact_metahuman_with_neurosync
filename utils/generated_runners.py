@@ -7,6 +7,7 @@ from threading import Thread, Event, Lock
 import numpy as np
 import random
 import io
+from utils.logging_config import get_logger
 
 from utils.audio.play_audio import play_audio_from_path, play_audio_from_memory
 from livelink.send_to_unreal import pre_encode_facial_data, send_pre_encoded_data_to_unreal
@@ -16,6 +17,7 @@ from livelink.animations.animation_emotion import determine_highest_emotion,  me
 from livelink.animations.animation_loader import emotion_animations
 
 queue_lock = Lock()
+logger = get_logger(__name__)
 
 def run_audio_animation(audio_input, generated_facial_data, py_face, socket_connection, default_animation_thread, stop_flag_getter=None):
     """
@@ -26,6 +28,14 @@ def run_audio_animation(audio_input, generated_facial_data, py_face, socket_conn
     """
     #print(f"输入数据检查: generated_facial_data 类型: {type(generated_facial_data)}, 长度: {len(generated_facial_data) if generated_facial_data is not None else 'None'}")
     
+    initial_stop_flag = stop_flag_getter() if stop_flag_getter else None
+    logger.debug(
+        "[R1] run_audio_animation-start stop_flag=%s audio_type=%s facial_frames=%s",
+        initial_stop_flag,
+        type(audio_input).__name__,
+        len(generated_facial_data) if generated_facial_data is not None else 0,
+    )
+
     if (generated_facial_data is not None and 
         len(generated_facial_data) > 0 and 
         len(generated_facial_data[0]) > 61):
@@ -47,10 +57,10 @@ def run_audio_animation(audio_input, generated_facial_data, py_face, socket_conn
             generated_facial_data = merge_emotion_data_into_facial_data_wrapper(generated_facial_data, selected_animation)
          #   print(f"融合后generated_facial_data 长度: {len(generated_facial_data)}")
         else:
-            print(f"未找到有效的情绪动画 for {dominant_emotion}")
+            logger.warning("未找到有效的情绪动画 for %s", dominant_emotion)
 
     else:
-        print("面部数据不符合要求，跳过情绪处理")
+        logger.warning("面部数据不符合要求，跳过情绪处理")
 
     encoding_face = initialize_py_face()
     #print("初始化 py_face 完成")
@@ -60,23 +70,23 @@ def run_audio_animation(audio_input, generated_facial_data, py_face, socket_conn
     with queue_lock:
         stop_default_animation.set()
         if default_animation_thread and default_animation_thread.is_alive():
-            print("等待默认动画线程结束")
+            logger.debug("等待默认动画线程结束")
             default_animation_thread.join()
 
     start_event = Event()
 
     if isinstance(audio_input, bytes):       
         audio_thread = Thread(target=play_audio_from_memory, args=(audio_input, start_event, False, stop_flag_getter))
-        print("播放完毕")
+        logger.debug("准备 bytes 音频线程")
     elif isinstance(audio_input, io.BytesIO):
         try:
-            print("处理BytesIO音频输入")
+            logger.debug("处理 BytesIO 音频输入")
             files = audio_input.getvalue()
             audio_thread = Thread(target=play_audio_from_memory, args=(files, start_event, False, stop_flag_getter))
         except Exception as e:
-            print(f"捕获音频时出错: {e}")           
+            logger.exception("捕获音频时出错: %s", e)
     else:
-        print("处理音频文件路径输入")
+        logger.debug("处理音频文件路径输入")
         audio_thread = Thread(target=play_audio_from_path, args=(audio_input, start_event))
     #print("成功捕获语音")
 
@@ -88,9 +98,22 @@ def run_audio_animation(audio_input, generated_facial_data, py_face, socket_conn
     #print("音频和数据线程已启动")
 
     start_event.set()
+    logger.debug("[R1] run_audio_animation-threads-started")
 
+    join_start = __import__("time").perf_counter()
     audio_thread.join()
+    logger.debug(
+        "[R1] run_audio_animation-audio-joined alive=%s stop_flag_now=%s",
+        audio_thread.is_alive(),
+        stop_flag_getter() if stop_flag_getter else None,
+    )
     data_thread.join()
+    logger.debug(
+        "[R1] run_audio_animation-data-joined alive=%s stop_flag_now=%s elapsed_ms=%.2f",
+        data_thread.is_alive(),
+        stop_flag_getter() if stop_flag_getter else None,
+        (__import__("time").perf_counter() - join_start) * 1000,
+    )
     #print("音频和数据线程已完成")
     
     # ✅ 确保音频完全播放完毕后再返回
@@ -110,6 +133,7 @@ def run_audio_animation(audio_input, generated_facial_data, py_face, socket_conn
 
     with queue_lock:
         stop_default_animation.clear()
+    logger.debug("[R1] run_audio_animation-end stop_flag=%s", stop_flag_getter() if stop_flag_getter else None)
         #print("默认动画停止标志已清除")
         #default_animation_thread = Thread(target=default_animation_loop, args=(py_face,))
         #default_animation_thread.start()

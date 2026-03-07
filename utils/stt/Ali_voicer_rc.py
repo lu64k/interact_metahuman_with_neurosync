@@ -6,6 +6,9 @@ import asyncio
 from queue import Queue
 import queue
 from threading import Thread
+from utils.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 class Callback_rc(RecognitionCallback):
     def __init__(self):
@@ -41,7 +44,7 @@ class Callback_rc(RecognitionCallback):
         return self.stop_llm_generate
 
     def on_open(self) -> None:
-        print('🎤 RecognitionCallback opening...')
+        logger.info('RecognitionCallback opening')
         try:
             # ✅ 如果已有旧的流，先关闭
             if self.stream:
@@ -60,10 +63,10 @@ class Callback_rc(RecognitionCallback):
                 self.mic = None
             
             # 创建新的音频对象
-            print('🎤 正在初始化 PyAudio...')
+            logger.info('正在初始化 PyAudio')
             self.mic = pyaudio.PyAudio()
             
-            print('🎤 正在打开音频流...')
+            logger.info('正在打开音频流')
             self.stream = self.mic.open(
                 format=pyaudio.paInt16,
                 channels=1,
@@ -71,12 +74,10 @@ class Callback_rc(RecognitionCallback):
                 input=True,
                 frames_per_buffer=3200  # ✅ 添加缓冲区大小
             )
-            print('✅ RecognitionCallback opened successfully')
+            logger.info('RecognitionCallback opened successfully')
             
         except Exception as e:
-            print(f'❌ RecognitionCallback on_open 失败: {e}')
-            import traceback
-            traceback.print_exc()
+            logger.exception('RecognitionCallback on_open 失败: %s', e)
             # 清理失败的资源
             if self.stream:
                 try:
@@ -93,37 +94,37 @@ class Callback_rc(RecognitionCallback):
             raise  # 重新抛出,让上层知道失败了
 
     def on_close(self) -> None:
-        print('🔒 RecognitionCallback closing...')
+        logger.info('RecognitionCallback closing')
         try:
             if self.stream:
                 try:
                     if self.stream.is_active():
                         self.stream.stop_stream()
                     self.stream.close()
-                    print('  ✓ Stream closed')
+                    logger.info('Stream closed')
                 except Exception as e:
-                    print(f'  ⚠️ Stream close error: {e}')
+                    logger.warning('Stream close error: %s', e)
                 finally:
                     self.stream = None
             
             if self.mic:
                 try:
                     self.mic.terminate()
-                    print('  ✓ Mic terminated')
+                    logger.info('Mic terminated')
                 except Exception as e:
-                    print(f'  ⚠️ Mic terminate error: {e}')
+                    logger.warning('Mic terminate error: %s', e)
                 finally:
                     self.mic = None
             
-            print('✅ RecognitionCallback closed')
+            logger.info('RecognitionCallback closed')
         except Exception as e:
-            print(f'❌ RecognitionCallback on_close 错误: {e}')
+            logger.exception('RecognitionCallback on_close 错误: %s', e)
 
     def on_complete(self) -> None:
-        print('RecognitionCallback completed.')
+        logger.info('RecognitionCallback completed')
 
     def on_error(self, message) -> None:
-        print(f'RecognitionCallback error: {message.message}')
+        logger.error('RecognitionCallback error: %s', message.message)
 
     def on_event(self, result: RecognitionResult, *args, **kwargs) -> None:
         self.new_input = result.get_sentence()  #用于储存实时输入的变量，为不完整句子
@@ -132,7 +133,7 @@ class Callback_rc(RecognitionCallback):
             self.first_sentence_time = time.time()  #马上记录收取句子时间
             self.stop_llm_generate = False
             self.new_sentence = self.new_input.get("text") #只有完整句子时才会被赋值
-            print(f"✅ 收到完整句子: {self.new_sentence}")
+            logger.info("收到完整句子: %s", self.new_sentence)
             self.new_input = None
             judger_thread = Thread(target=asyncio.run, args=(self.time_judger(),))
             judger_thread.daemon = True  # ✅ 设置为守护线程，避免阻塞
@@ -147,9 +148,9 @@ class Callback_rc(RecognitionCallback):
         - SILENT_TIMEOUT (1秒): 快速连续说话的阈值
         - MAX_SENTENCE_DURATION (5秒): 新对话判定阈值
         """
-        print("📝 句子判断启动")
+        logger.info("句子判断启动")
         if self.new_input:  # 防止句子不完整就进入判断
-            print("⚠️ 句子不完整，跳过判断")
+            logger.warning("句子不完整，跳过判断")
             return
         
         # ✅ 获取完整句子并立即清空，避免重复处理
@@ -157,7 +158,7 @@ class Callback_rc(RecognitionCallback):
         self.new_sentence = None
         
         if not sentence:
-            print("⚠️ 无有效句子，跳过")
+            logger.warning("无有效句子，跳过")
             return
         
         current_time = time.time()
@@ -169,7 +170,7 @@ class Callback_rc(RecognitionCallback):
             self.first_run = True
             self.last_sentence_time = self.first_sentence_time - 0.5
             self.final_texts.clear()
-            print("🔄 首句，重置状态")
+            logger.info("首句，重置状态")
         else:
             self.first_run = False
         
@@ -178,12 +179,12 @@ class Callback_rc(RecognitionCallback):
         
         # ✅ 计算时间间隔
         time_diff = self.first_sentence_time - self.last_sentence_time if self.first_sentence_time else 0
-        print(f"⏱️ 时间间隔: {time_diff:.2f}秒 | 累积句子数: {len(self.final_texts)}")
+        logger.info("时间间隔: %.2f秒 | 累积句子数: %s", time_diff, len(self.final_texts))
         
         # ✅ 判断逻辑
         if len(self.final_texts) == 1:
             # 首句：无论间隔多久，都先打断旧对话（如果有的话）
-            print(f"1️⃣ 首句（间隔 {time_diff:.2f}秒），先打断旧对话...")
+            logger.info("首句（间隔 %.2f秒），先打断旧对话", time_diff)
             self.stop_llm_generate = True
             if self.clear_tts_callback:
                 self.clear_tts_callback()  # 清空 TTS 队列和停止 LLM
@@ -191,22 +192,22 @@ class Callback_rc(RecognitionCallback):
             # 然后等待看是否有后续句子
             if time_diff <= self.MAX_SENTENCE_DURATION:
                 # 间隔不大，可能是连续说话，等待拼接
-                print(f"  等待 {self.WAIT_FOR_CONTINUATION} 秒（允许正常停顿）...")
+                logger.info("等待 %s 秒（允许正常停顿）", self.WAIT_FOR_CONTINUATION)
                 await asyncio.sleep(self.WAIT_FOR_CONTINUATION)
                 if self.new_input:  # 有新输入，返回等待拼接
-                    print("  → 检测到新输入，等待拼接")
+                    logger.debug("检测到新输入，等待拼接")
                     return
             send = True
             
         elif time_diff < self.SILENT_TIMEOUT:
             # <1秒：快速连续说话，继续累积
-            print("⚡ 间隔<1秒，快速连续说话，继续累积")
+            logger.info("间隔<1秒，快速连续说话，继续累积")
             await asyncio.sleep(self.WAIT_FOR_CONTINUATION)  # ✅ 使用新的等待时间
             if self.new_input:
-                print("  → 检测到新输入，等待拼接")
+                logger.debug("检测到新输入，等待拼接")
                 return
             # ✅ 打断当前对话并清空 TTS 队列
-            print("🛑 触发打断机制：停止 LLM 并清空 TTS 队列")
+            logger.warning("触发打断机制：停止 LLM 并清空 TTS 队列")
             self.stop_llm_generate = True
             if self.clear_tts_callback:
                 self.clear_tts_callback()  # 清空 TTS 队列
@@ -214,14 +215,14 @@ class Callback_rc(RecognitionCallback):
             
         elif time_diff < self.MAX_SENTENCE_DURATION:
             # 1-5秒：正常拼接（允许停顿思考）
-            print(f"🔗 间隔 {time_diff:.2f}秒（正常停顿），等待 {self.WAIT_FOR_CONTINUATION} 秒后拼接")
+            logger.info("间隔 %.2f秒（正常停顿），等待 %s 秒后拼接", time_diff, self.WAIT_FOR_CONTINUATION)
             self.stop_event.set()
             await asyncio.sleep(self.WAIT_FOR_CONTINUATION)  # ✅ 使用新的等待时间
             if self.new_input:
-                print("  → 检测到新输入，等待拼接")
+                logger.debug("检测到新输入，等待拼接")
                 return
             # ✅ 打断当前对话并清空 TTS 队列
-            print("🛑 触发打断机制：停止 LLM 并清空 TTS 队列")
+            logger.warning("触发打断机制：停止 LLM 并清空 TTS 队列")
             self.stop_llm_generate = True
             if self.clear_tts_callback:
                 self.clear_tts_callback()
@@ -229,14 +230,14 @@ class Callback_rc(RecognitionCallback):
             
         else:
             # >5秒：新对话，清空旧内容
-            print(f"🆕 间隔 {time_diff:.2f}秒（>5秒），视为新对话")
+            logger.info("间隔 %.2f秒（>5秒），视为新对话", time_diff)
             self.stop_event.set()
             await asyncio.sleep(self.WAIT_FOR_CONTINUATION)  # ✅ 使用新的等待时间
             if self.new_input:
-                print("  → 检测到新输入，等待拼接")
+                logger.debug("检测到新输入，等待拼接")
                 return
             # ✅ 打断当前对话并清空 TTS 队列
-            print("🛑 触发打断机制：停止 LLM 并清空 TTS 队列")
+            logger.warning("触发打断机制：停止 LLM 并清空 TTS 队列")
             self.stop_llm_generate = True
             if self.clear_tts_callback:
                 self.clear_tts_callback()
@@ -252,7 +253,7 @@ class Callback_rc(RecognitionCallback):
             
             # ✅ 【关键修复】如果拼接后是空字符串，跳过发送
             if not paragraph or paragraph.strip() == "":
-                print("⚠️ 拼接后为空，跳过发送")
+                logger.warning("拼接后为空，跳过发送")
                 return
             
             # 清空队列
@@ -261,13 +262,13 @@ class Callback_rc(RecognitionCallback):
                 self.rc_queue.task_done()
             
             self.rc_queue.put(paragraph)
-            print(f"📤 已加入队列: [{paragraph}]")
+            logger.info("已加入队列: [%s]", paragraph)
             
             # ✅ 发送后清空缓冲区
             self.final_texts.clear()
             self.last_sentence_time = self.first_sentence_time
         
-        print("✅ 句子判断结束")
+        logger.info("句子判断结束")
         return
 
 
@@ -279,8 +280,8 @@ class Callback_rc(RecognitionCallback):
             while not self.rc_queue.empty():  # 清空队列
                 self.rc_queue.get()
                 self.rc_queue.task_done()    
-                print(f"已清空录音队列")
+                logger.info("已清空录音队列")
             self.stop_llm_generate = True
             self.rc_queue.put(paragraph)  # 塞进队列
-            print(f"请求已加入队列：{paragraph}")
+            logger.info("请求已加入队列：%s", paragraph)
             self.final_texts.clear()

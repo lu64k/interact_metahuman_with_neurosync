@@ -15,6 +15,9 @@ import numpy as np
 from threading import Thread
 import threading
 import asyncio
+from utils.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 def parse_blendshapes_from_json(json_response):
     blendshapes = json_response.get("blendshapes", [])
@@ -48,6 +51,7 @@ class Run_LLM_To_Anim():
         self.interrupt_monitor_thread = None  # ✅ 监控线程
         self.queue_processor_thread = None  # ✅ 队列处理线程
         self.queue_processor_running = False  # ✅ 队列处理线程运行标志
+        self.interrupt_seq = 0  # R1 debug: monotonic interrupt sequence id
 
     def initialize_resources(self, start_default_animation=True):
         initialize_directories()
@@ -71,7 +75,7 @@ class Run_LLM_To_Anim():
         ✅ 监控线程：实时检查打断信号并立即停止音频
         独立线程运行，不受 process_audio_queue 阻塞影响
         """
-        print("🔍 [监控线程] 启动打断监控...")
+        logger.info("[监控线程] 启动打断监控")
         self.interrupt_monitor_running = True
         last_stop_state = False  # ✅ 记录上一次的 stop 状态
         
@@ -79,26 +83,26 @@ class Run_LLM_To_Anim():
             try:
                 # ✅ 只在 stop 从 False 变为 True 时才执行打断（边缘触发）
                 if self.stop and not last_stop_state:
-                    print("🚨 [监控线程] 检测到打断信号！立即执行强制中断...")
+                    logger.warning("[监控线程] 检测到打断信号，立即执行强制中断")
                     
                     # ✅ 1. 立即停止音频播放
                     try:
                         import pygame
                         if pygame.mixer.get_init() and pygame.mixer.music.get_busy():
                             pygame.mixer.music.stop()
-                            print("  ✅ [监控线程] 已强制停止音频播放")
+                            logger.info("[监控线程] 已强制停止音频播放")
                     except Exception as e:
-                        print(f"  ⚠️ [监控线程] 停止音频失败: {e}")
+                        logger.warning("[监控线程] 停止音频失败: %s", e)
                     
                     # ✅ 2. 设置 stop_event 停止 LLM 生成
                     if self.current_stop_event:
                         try:
                             self.current_stop_event.set()
-                            print("  ✅ [监控线程] 已设置 stop_event")
+                            logger.info("[监控线程] 已设置 stop_event")
                         except Exception as e:
-                            print(f"  ⚠️ [监控线程] 设置 stop_event 失败: {e}")
+                            logger.warning("[监控线程] 设置 stop_event 失败: %s", e)
                     
-                    print("  ✅ [监控线程] 强制中断完成，等待新请求...")
+                    logger.info("[监控线程] 强制中断完成，等待新请求")
                 
                 # ✅ 更新上一次状态
                 last_stop_state = self.stop
@@ -106,19 +110,17 @@ class Run_LLM_To_Anim():
                 time.sleep(0.05)  # 每 50ms 检查一次
                 
             except Exception as e:
-                print(f"❌ [监控线程] 错误: {e}")
-                import traceback
-                traceback.print_exc()
+                logger.exception("[监控线程] 错误: %s", e)
                 time.sleep(0.1)
         
-        print("🔍 [监控线程] 停止监控")
+        logger.info("[监控线程] 停止监控")
 
     def process_audio_queue(self):
         """
         持久运行的队列处理线程
         不会因为打断而退出，持续监听队列
         """
-        print("🎬 [队列线程] 启动音频队列处理线程...")
+        logger.info("[队列线程] 启动音频队列处理线程")
         self.queue_processor_running = True
         
         try:
@@ -126,15 +128,25 @@ class Run_LLM_To_Anim():
                 try:
                     # ✅ 检查是否需要停止当前播放
                     if self.stop:
-                        print("🛑 [队列线程] 收到停止信号，立即停止音频播放并清空 TTS 队列...")
+                        interrupt_seq = self.interrupt_seq
+                        stop_branch_ts = time.perf_counter()
+                        logger.warning("[队列线程] 收到停止信号，立即停止音频播放并清空 TTS 队列")
+                        logger.debug(
+                            "[R1] stop-branch-enter seq=%s stop=%s queue_size=%s",
+                            interrupt_seq,
+                            self.stop,
+                            self.tts_queue.qsize(),
+                        )
                         # ✅ 【关键】立即停止正在播放的音频
+                        mixer_busy = False
                         try:
                             import pygame
                             if pygame.mixer.get_init() and pygame.mixer.music.get_busy():
                                 pygame.mixer.music.stop()
-                                print("  ✅ [队列线程] 已停止正在播放的音频")
+                                logger.info("[队列线程] 已停止正在播放的音频")
+                                mixer_busy = True
                         except Exception as e:
-                            print(f"  ⚠️ [队列线程] 停止音频播放失败: {e}")
+                            logger.warning("[队列线程] 停止音频播放失败: %s", e)
                         
                         # ✅ 清空队列
                         cleared_count = 0
@@ -145,10 +157,25 @@ class Run_LLM_To_Anim():
                                 cleared_count += 1
                             except:
                                 break
-                        print(f"✅ [队列线程] TTS 队列已清空 ({cleared_count} 项)")
-                        # ✅ 重置停止标志，准备下一轮
-                        self.stop = False
-                        print("🔄 [队列线程] 打断处理完成，继续等待新队列...")
+                        logger.info("[队列线程] TTS 队列已清空 (%s 项)", cleared_count)
+                        # ✅ 关键：不要在队列线程里立即复位 stop。
+                        # 复位交给新请求入口（ASRManager.process_rc_queue）统一执行，
+                        # 避免旧 LLM/TTS 在打断后回流入队。
+                        logger.debug(
+                            "[R1] stop-reset-before seq=%s stop=%s mixer_busy_was=%s queue_size=%s elapsed_ms=%.2f",
+                            interrupt_seq,
+                            self.stop,
+                            mixer_busy,
+                            self.tts_queue.qsize(),
+                            (time.perf_counter() - stop_branch_ts) * 1000,
+                        )
+                        logger.info("[队列线程] 打断处理完成，等待新请求复位 stop")
+                        logger.debug(
+                            "[R1] stop-reset-after seq=%s stop=%s queue_size=%s",
+                            interrupt_seq,
+                            self.stop,
+                            self.tts_queue.qsize(),
+                        )
                         # ❌ 不退出，继续循环等待新队列项
                         continue
                     
@@ -167,18 +194,18 @@ class Run_LLM_To_Anim():
                     except:
                         continue
                     
-                    print(f"📥 [队列线程] 从队列获取项目，剩余: {self.tts_queue.qsize()}段音频")
+                    logger.debug("[队列线程] 从队列获取项目，剩余: %s 段音频", self.tts_queue.qsize())
                     
                     # ✅ None 是队列结束标记（但不退出线程，继续等待下一轮）
                     if queue_item is None:
-                        print("📭 [队列线程] 收到队列结束标记，本轮播放完成")
+                        logger.info("[队列线程] 收到队列结束标记，本轮播放完成")
                         self.tts_queue.task_done()
                         # ❌ 不退出线程，继续等待新的队列项
                         continue  # ✅ 改为 continue
                     
                     # ✅ 处理会话结束标记
                     if isinstance(queue_item, dict) and queue_item.get("type") == "end":
-                        print("📭 [队列线程] 收到会话结束标记")
+                        logger.info("[队列线程] 收到会话结束标记")
                         # session_id = queue_item.get("session_id")
                         # # ✅ 优先使用 item 中的 callback
                         # callback = queue_item.get("callback", self.streaming_callback)
@@ -222,12 +249,12 @@ class Run_LLM_To_Anim():
                         
                         # ✅ 播放前最后一次检查打断
                         if self.stop:
-                            print("🛑 [队列线程] 播放前检测到打断，跳过该音频")
+                            logger.warning("[队列线程] 播放前检测到打断，跳过该音频")
                             self.tts_queue.task_done()
                             continue
                         
                         if audio_wav:
-                            print(f"🎵 [队列线程] 开始播放音频: {sentence_text[:30]}...")
+                            logger.info("[队列线程] 开始播放音频: %s...", sentence_text[:30])
                             # 面部数据处理
                             facial_data_raw = self.audio_to_blendshapes_route(audio_wav)
                             facial_data = parse_blendshapes_from_json({'blendshapes': facial_data_raw})
@@ -241,34 +268,28 @@ class Run_LLM_To_Anim():
                                     self.default_animation_thread,
                                     stop_flag_getter=lambda: self.stop  # 传入打断检查
                                 )
-                                print(f"✅ [队列线程] 音频播放完成: {sentence_text[:30]}...")
+                                logger.info("[队列线程] 音频播放完成: %s...", sentence_text[:30])
                             else:
-                                print("⚠️ [队列线程] 面部数据空了，跳过")
+                                logger.warning("[队列线程] 面部数据空了，跳过")
                         else:
-                            print("⚠️ [队列线程] 音频数据为空")
+                            logger.warning("[队列线程] 音频数据为空")
                         
                     except Exception as e:
-                        print(f"❌ [队列线程] 处理音频队列项失败: {e}")
-                        import traceback
-                        traceback.print_exc()
+                        logger.exception("[队列线程] 处理音频队列项失败: %s", e)
                     finally:
                         self.tts_queue.task_done()
                 
                 except Exception as e:
                     # ✅ 捕获内层循环的所有异常，防止线程意外退出
-                    print(f"❌ [队列线程] 内层循环异常: {e}")
-                    import traceback
-                    traceback.print_exc()
+                    logger.exception("[队列线程] 内层循环异常: %s", e)
                     time.sleep(0.1)  # 防止异常导致的快速循环
         
         except Exception as e:
             # ✅ 捕获外层异常（理论上不应该发生）
-            print(f"❌ [队列线程] 外层循环异常: {e}")
-            import traceback
-            traceback.print_exc()
+            logger.exception("[队列线程] 外层循环异常: %s", e)
         finally:
             # ✅ 线程退出清理
-            print("🎬 [队列线程] 音频队列处理线程退出")
+            logger.info("[队列线程] 音频队列处理线程退出")
             self.queue_processor_running = False
 
     async def process_llm_to_tts(self, prompt, llm_model,stop_event: asyncio.Event, chatname:str):
@@ -279,7 +300,7 @@ class Run_LLM_To_Anim():
             async for text in llm_chat.process_streaming_content(prompt,llm_model,stop_event, chatname):
                 # ✅ 检查是否被打断
                 if self.stop is True:
-                    print("🛑 检测到停止信号，停止 LLM-to-TTS 流程")
+                    logger.warning("检测到停止信号，停止 LLM-to-TTS 流程")
                     llm_chat.is_streaming_done()
                     await asyncio.sleep(0.2)
                     # ✅ 不再放入结束标记，避免与清空逻辑冲突
@@ -291,7 +312,7 @@ class Run_LLM_To_Anim():
                     
                     # ✅ [FIX] 检查返回值是否有效，防止解包错误
                     if not tts_result or len(tts_result) != 2:
-                        print(f"❌ TTS 返回值异常: {tts_result}")
+                        logger.error("TTS 返回值异常: %s", tts_result)
                         continue
                         
                     audio, request_id = tts_result  # ✅ 安全解包
@@ -300,7 +321,7 @@ class Run_LLM_To_Anim():
                     # 如果外部传入了 session_id (self.current_session_id)，则优先使用它
                     if first_request_id is None:
                         first_request_id = self.current_session_id if self.current_session_id else request_id
-                        print(f"🆔 Session ID (Effective): {first_request_id}")
+                        logger.info("Session ID (Effective): %s", first_request_id)
                         
                         # ✅ [FIX] 如果之前没有 session_id，现在有了，立即初始化
                         if self.current_session_id is None:
@@ -314,7 +335,7 @@ class Run_LLM_To_Anim():
                     
                     # ✅ 再次检查是否被打断
                     if self.stop is True:
-                        print("🛑 TTS 完成后检测到停止信号，丢弃该音频")
+                        logger.warning("TTS 完成后检测到停止信号，丢弃该音频")
                         llm_chat.is_streaming_done()
                         return "".join(result), first_request_id
                     
@@ -337,9 +358,9 @@ class Run_LLM_To_Anim():
                             "callback": self.streaming_callback  # ✅ 传递 callback
                         })
                         result.append(text)
-                        print(f"📥 已将句子放入 TTS 队列: {text[:20]}...")
+                        logger.info("已将句子放入 TTS 队列: %s...", text[:20])
                     else:
-                        print("⚠️ call_TTS 返回空音频")
+                        logger.warning("call_TTS 返回空音频")
 
             # ✅ 正常结束，放入结束标记
             if not self.stop:
@@ -349,14 +370,12 @@ class Run_LLM_To_Anim():
                     "session_id": first_request_id,
                     "callback": self.streaming_callback  # ✅ 传递 callback
                 })
-                print("📭 已放入队列结束标记")
+                logger.info("已放入队列结束标记")
             
             return "".join(result), first_request_id
 
         except Exception as e:
-            print(f"❌ Process LLM to TTS error: {e}")
-            import traceback
-            traceback.print_exc()
+            logger.exception("Process LLM to TTS error: %s", e)
             # 确保上层知道结束
             try:
                 if not self.stop:
@@ -387,35 +406,35 @@ class Run_LLM_To_Anim():
             # ✅ 【关键】启动监控线程（检查线程是否存活）
             if not self.interrupt_monitor_running or (self.interrupt_monitor_thread and not self.interrupt_monitor_thread.is_alive()):
                 if self.interrupt_monitor_thread and not self.interrupt_monitor_thread.is_alive():
-                    print("⚠️ [启动] 监控线程已死亡，重新启动...")
+                    logger.warning("[启动] 监控线程已死亡，重新启动")
                     self.interrupt_monitor_running = False
                 
                 self.interrupt_monitor_thread = Thread(target=self.interrupt_monitor, daemon=True)
                 self.interrupt_monitor_thread.start()
-                print("🔍 [启动] 打断监控线程已启动")
+                logger.info("[启动] 打断监控线程已启动")
             else:
-                print("🔍 [启动] 打断监控线程已运行中")
+                logger.info("[启动] 打断监控线程已运行中")
             
             # ✅ 【关键】启动队列处理线程（检查线程是否存活）
             if not self.queue_processor_running or (self.queue_processor_thread and not self.queue_processor_thread.is_alive()):
                 if self.queue_processor_thread and not self.queue_processor_thread.is_alive():
-                    print("⚠️ [启动] 队列处理线程已死亡，重新启动...")
+                    logger.warning("[启动] 队列处理线程已死亡，重新启动")
                     self.queue_processor_running = False
                 
                 self.queue_processor_thread = Thread(target=self.process_audio_queue, daemon=True)
                 self.queue_processor_thread.start()
-                print("🎬 [启动] 队列处理线程已启动")
+                logger.info("[启动] 队列处理线程已启动")
             else:
-                print("🎬 [启动] 队列处理线程已运行中")
-                print(f"📊 [启动] 当前队列状态: {self.tts_queue.qsize()} 个待处理项")
+                logger.info("[启动] 队列处理线程已运行中")
+                logger.info("[启动] 当前队列状态: %s 个待处理项", self.tts_queue.qsize())
             
             # ✅ 生成 TTS（异步）
             response, generated_session_id = await self.process_llm_to_tts(prompt, llm_model, stop_event, chatname)
-            print("✅ LLM 生成完成")
+            logger.info("LLM 生成完成")
             
             # ✅ 对话完成后，自动生成记忆片段
             try:
-                print(f"💾 [记忆] 开始为对话生成记忆片段...")
+                logger.info("[记忆] 开始为对话生成记忆片段")
                 # 加载当前对话历史
                 from utils.llm.llm_utils import load_memory, add_memory, get_system_prompt_with_memory
                 history_path, history = load_history(chatname)
@@ -428,15 +447,13 @@ class Run_LLM_To_Anim():
                     if success:
                         # 添加到记忆库
                         add_memory(chatname, memory_summary)
-                        print(f"✅ [记忆] 成功生成并保存记忆片段: {memory_summary[:50]}...")
+                        logger.info("[记忆] 成功生成并保存记忆片段: %s...", memory_summary[:50])
                     else:
-                        print(f"⚠️ [记忆] 生成记忆摘要失败")
+                        logger.warning("[记忆] 生成记忆摘要失败")
                 else:
-                    print(f"⚠️ {len(history)}条历史，[记忆] 对话历史不足，跳过记忆生成")
+                    logger.warning("%s条历史，[记忆] 对话历史不足，跳过记忆生成", len(history))
             except Exception as e:
-                print(f"⚠️ [记忆] 自动生成记忆失败: {e}")
-                import traceback
-                traceback.print_exc()
+                logger.exception("[记忆] 自动生成记忆失败: %s", e)
             
             # ✅ 标记完成
             # 如果调用时没有传入 session_id，则使用生成的 session_id
@@ -454,7 +471,7 @@ class Run_LLM_To_Anim():
             # ✅ 返回响应和 session_id
             return response, generated_session_id
         except Exception as e:
-            print(f"Start queue audio error: {e}")
+            logger.exception("Start queue audio error: %s", e)
             # 清理
             self.current_session_id = None
             self.streaming_callback = None

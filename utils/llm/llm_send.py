@@ -11,6 +11,9 @@ import io
 import asyncio
 import time
 import json
+from utils.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 
 
@@ -23,7 +26,7 @@ class LLMChat():
         sys_prompt_path = os.path.join(root_dir, "config_files", "sys_prompt.txt")
         self.system_prompt = load_text(sys_prompt_path) if os.path.exists(sys_prompt_path) else ""
         if not self.system_prompt:
-            print(f"⚠️ 警告：无法从 {sys_prompt_path} 加载系统提示词，使用空字符串")
+            logger.warning("无法从 %s 加载系统提示词，使用空字符串", sys_prompt_path)
         self.llm_url = "https://api.tu-zi.com/v1"
         self.llm_key = init_api_key(env_name="tuzi_api_key", input_api_key="your llm api key")
         self.seed = 42
@@ -32,7 +35,7 @@ class LLMChat():
 
     def is_streaming_done(self):
         self.on_streaming=False
-        print("llm停止事件设置成功")
+        logger.info("LLM 停止事件设置成功")
         return not self.on_streaming
 
         
@@ -64,7 +67,7 @@ class LLMChat():
                 completion = []
                 client.close()
                 self.buffer_text = ""
-                print("Stop signal received, LLM client closed")
+                logger.info("Stop signal received, LLM client closed")
                 self.on_streaming=True
                 break
             
@@ -95,7 +98,7 @@ class LLMChat():
 
             if stop_event.is_set():
                 self.buffer_text = ""
-                print("文本缓存清理成功")
+                logger.info("文本缓存清理成功")
 
             if time.time() - last_check >= 0:
                 cleaned_buffer = re.sub(r'\s+', '', self.buffer_text)
@@ -135,19 +138,19 @@ def load_history(chatname):
     # ✅ 动态从 chat_list.json 获取文件名
     file_name = get_file_name(chatname)
     if not file_name:
-        print(f"⚠️ 未找到聊天名称: {chatname}")
+        logger.warning("未找到聊天名称: %s", chatname)
         return "", []
     
     chat_path = os.path.join("dialogue_histories", f"{file_name}.txt")
     path = resolve_path(chat_path)
-    print(path)
+    logger.info("加载历史路径: %s", path)
     
     try:
         history_text = load_text(r"{}".format(path))
         
         # 处理空文件或空字符串
         if not history_text or history_text.strip() == "":
-            print(f"⚠️ 历史文件为空或不存在: {path}")
+            logger.warning("历史文件为空或不存在: %s", path)
             return path, []
         
         # 解析 JSON 字符串
@@ -155,16 +158,16 @@ def load_history(chatname):
         
         # 确保返回的是列表
         if not isinstance(history, list):
-            print(f"⚠️ 历史记录不是列表格式，重置为空列表")
+            logger.warning("历史记录不是列表格式，重置为空列表")
             return path, []
         
         return path, history
         
     except json.JSONDecodeError as e:
-        print(f"⚠️ JSON 解析失败: {e}，初始化为空列表")
+        logger.warning("JSON 解析失败: %s，初始化为空列表", e)
         return path, []
     except Exception as e:
-        print(f"❌ 加载历史记录失败: {e}，初始化为空列表")
+        logger.exception("加载历史记录失败: %s，初始化为空列表", e)
         return path, []
 
 
@@ -182,7 +185,7 @@ def save_history(chatname, history):
     # ✅ 动态从 chat_list.json 获取文件名
     file_name = get_file_name(chatname)
     if not file_name:
-        print(f"❌ 无法保存：未找到聊天名称 {chatname}")
+        logger.error("无法保存：未找到聊天名称 %s", chatname)
         return "error"
     
     chat_path = os.path.join("dialogue_histories", f"{file_name}.txt")
@@ -191,7 +194,7 @@ def save_history(chatname, history):
     # 将 history 转为 JSON 字符串并写入文件
     with open(path, 'w', encoding='utf-8') as f:
         json.dump(history, f, ensure_ascii=False, indent=4)
-    print(f"历史记录保存成功：{path}")
+    logger.info("历史记录保存成功：%s", path)
     return "saved history"
 
 def process_for_tts(text_list):

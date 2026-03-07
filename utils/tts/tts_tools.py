@@ -16,6 +16,9 @@ from utils.utils import init_api_key
 import os
 import asyncio
 import uuid
+from utils.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 
 def call_local_tts(text, voice=None): 
@@ -55,18 +58,18 @@ def synthesize_speech_cosy_cove_streaming(text):
             result = synthesizer.streaming_call(text)
             
             if result is None is None:
-                print("❌ No audio data returned from TTS API")
+                logger.error("No audio data returned from TTS API")
                 return jsonify({'error': 'Failed to generate audio, no data returned'}), 500
 
             audio_bytes = result
             audio_file = io.BytesIO(audio_bytes)
             
             wavio = pcm_to_wav(audio_bytes, sample_rate=48000, channels=1, sample_width=2)
-            print("got audio bytes")
+            logger.info("Got audio bytes")
             
             return wavio
         except Exception as e:
-            print(f"Error: {e}")
+            logger.exception("TTS streaming error: %s", e)
             return jsonify({'error': 'Exception occurred', 'details': str(e)}), 500
     elif text == "llm finished":
         synthesizer=SpeechSynthesizer(model=model, voice=voice, format=format)
@@ -99,21 +102,21 @@ async def synthesize_speech(text):
         if not request_id:
             import uuid
             request_id = str(uuid.uuid4())
-            print(f"⚠️ Warning: Could not get request_id from TTS, generated UUID: {request_id}")
+            logger.warning("Could not get request_id from TTS, generated UUID: %s", request_id)
         else:
-            print('requestId: ', request_id)
+            logger.info("requestId: %s", request_id)
             
         # ✅ 返回音频和 request_id
         return audio, request_id
     except Exception as e:
-        print(f"TTS synthesis exception: {e}")
+        logger.exception("TTS synthesis exception: %s", e)
         return None, None
         
 async def call_TTS(output_text):
     if not output_text:
         return None, None  # ✅ 返回 (audio, request_id)
     try:
-        print(f"tts received {output_text}")
+        logger.info("TTS received text: %s", output_text)
         # ✅ [FIX] 移除 app.app_context()，因为我们不在 Flask 请求上下文中运行
         raw_audio, request_id = await synthesize_speech(output_text)  # ✅ 接收两个返回值
             
@@ -123,12 +126,12 @@ async def call_TTS(output_text):
             request_id = str(uuid.uuid4())
             
         if raw_audio:
-            print("got audio")
+            logger.info("Got audio from TTS provider")
             wav_bytes = await asyncio.to_thread(pcm_to_wav, raw_audio)
             return wav_bytes.getvalue(), request_id  # ✅ 返回音频和 request_id
         else:
-            print("failed to get audio output")
+            logger.warning("Failed to get audio output")
             return None, None
     except Exception as e:
-        print(f"call tts error: {e}")
+        logger.exception("call_TTS error: %s", e)
         return None, None

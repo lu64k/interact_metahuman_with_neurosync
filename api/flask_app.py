@@ -3,6 +3,9 @@ import uuid
 from flask import Flask, request, jsonify
 from utils.llm.chat_list_manager import get_all_chat_names
 from utils.llm.chat_utils import create_new_chat
+from utils.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 
 def create_flask_app(asr_manager, streaming_responses, streaming_lock):
@@ -98,10 +101,12 @@ def create_flask_app(asr_manager, streaming_responses, streaming_lock):
 
 
 def run_flask(app, host='0.0.0.0', port=8999):
+    logger.info("Starting Flask app on %s:%s", host, port)
     app.run(host=host, port=port, debug=True, use_reloader=False)
 
 
 def start_flask_thread(app, host='0.0.0.0', port=8999):
     thread = threading.Thread(target=run_flask, args=(app, host, port), daemon=True)
     thread.start()
+    logger.info("Flask thread started (daemon=%s)", thread.daemon)
     return thread
