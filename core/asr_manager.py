@@ -25,13 +25,19 @@ class ASRManager:
             'chats': 'default'
         }
         self.config_lock = threading.Lock()
+        self.request_version = 0
+        self.request_version_lock = threading.Lock()
 
-    def clear_tts_queue(self):
+    def clear_tts_queue(self, supersede_history: bool = True, reason: str = "asr_interrupt"):
         """Clear TTS queue and stop current streaming generation."""
         self.audio_que.interrupt_seq += 1
         interrupt_seq = self.audio_que.interrupt_seq
         queue_size_before = self.audio_que.tts_queue.qsize()
-        logger.info("[实时打断] 清空 TTS 队列并停止 LLM 生成")
+        logger.info(
+            "[实时打断] 清空 TTS 队列并停止 LLM 生成 (supersede_history=%s, reason=%s)",
+            supersede_history,
+            reason,
+        )
         logger.debug(
             "[R1] interrupt-trigger seq=%s stop_before=%s queue_size_before=%s has_stop_event=%s",
             interrupt_seq,
@@ -41,6 +47,10 @@ class ASRManager:
         )
 
         self.audio_que.stop = True
+        if hasattr(self.audio_que, "skip_history_on_interrupt"):
+            self.audio_que.skip_history_on_interrupt = supersede_history
+        if supersede_history and hasattr(self.audio_que, "mark_active_request_superseded"):
+            self.audio_que.mark_active_request_superseded(reason)
 
         if self.audio_que.current_stop_event:
             try:
@@ -122,6 +132,10 @@ class ASRManager:
                 
                 stop_event = asyncio.Event()
                 self.audio_que.current_stop_event = stop_event
+                with self.request_version_lock:
+                    self.request_version += 1
+                    request_version = self.request_version
+                logger.info("[队列处理] 分配请求版本: v%s", request_version)
                 
                 with self.config_lock:
                     active_model = self.current_config.get('model', llm_model)
@@ -133,7 +147,13 @@ class ASRManager:
                 callback = self.push_sentence_callback
                 
                 result = await self.audio_que.start_queue_audio(
-                    prompt, active_model, stop_event, active_chats, session_id, callback
+                    prompt,
+                    active_model,
+                    stop_event,
+                    active_chats,
+                    session_id,
+                    callback,
+                    request_version=request_version,
                 )
                 
                 if result:
@@ -284,6 +304,18 @@ class ASRManager:
         self.callback_rc.first_run = False
         self.callback_rc.first_sentence_time = None
         self.callback_rc.last_sentence_time = None
+        if hasattr(self.callback_rc, 'last_received_end_ts'):
+            self.callback_rc.last_received_end_ts = None
+        if hasattr(self.callback_rc, 'last_committed_end_ts'):
+            self.callback_rc.last_committed_end_ts = None
+        if hasattr(self.callback_rc, 'last_commit_wall_ts'):
+            self.callback_rc.last_commit_wall_ts = None
+        if hasattr(self.callback_rc, '_last_time_source'):
+            self.callback_rc._last_time_source = None
+        if hasattr(self.callback_rc, '_timestamp_probe_logged'):
+            self.callback_rc._timestamp_probe_logged = False
+        if hasattr(self.callback_rc, 'pending_paragraph'):
+            self.callback_rc.pending_paragraph = None
         
         while not self.rc_queue.empty():
             try:

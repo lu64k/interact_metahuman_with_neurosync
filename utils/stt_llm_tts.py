@@ -52,6 +52,30 @@ class Run_LLM_To_Anim():
         self.queue_processor_thread = None  # ✅ 队列处理线程
         self.queue_processor_running = False  # ✅ 队列处理线程运行标志
         self.interrupt_seq = 0  # R1 debug: monotonic interrupt sequence id
+        self.active_request_version = None
+        self.superseded_versions = set()
+        self.version_lock = threading.Lock()
+        self.skip_history_on_interrupt = True
+
+    def mark_active_request_superseded(self, reason="interrupt"):
+        with self.version_lock:
+            if self.active_request_version is not None:
+                self.superseded_versions.add(self.active_request_version)
+                logger.info(
+                    "[版本] supersede 当前请求: v%s reason=%s",
+                    self.active_request_version,
+                    reason,
+                )
+
+    def _is_version_superseded(self, request_version):
+        if request_version is None:
+            return False
+        with self.version_lock:
+            if request_version in self.superseded_versions:
+                return True
+            if self.active_request_version is not None and request_version != self.active_request_version:
+                return True
+        return False
 
     def initialize_resources(self, start_default_animation=True):
         initialize_directories()
@@ -217,7 +241,12 @@ class Run_LLM_To_Anim():
                     
                     # ✅ 处理会话结束标记
                     if isinstance(queue_item, dict) and queue_item.get("type") == "end":
-                        logger.info("[队列线程] 收到会话结束标记")
+                        item_version = queue_item.get("request_version")
+                        if self._is_version_superseded(item_version):
+                            logger.info("[队列线程] 忽略旧版本结束标记: v%s", item_version)
+                            self.tts_queue.task_done()
+                            continue
+                        logger.info("[队列线程] 收到会话结束标记 (v%s)", item_version)
                         # session_id = queue_item.get("session_id")
                         # # ✅ 优先使用 item 中的 callback
                         # callback = queue_item.get("callback", self.streaming_callback)
@@ -242,11 +271,20 @@ class Run_LLM_To_Anim():
                         # 提取文本和音频
                         sentence_text = queue_item.get("text", "")
                         audio_wav = queue_item.get("audio", None)
+                        item_version = queue_item.get("request_version")
                         # ✅ 获取 session_id (优先使用 item 中的)
                         item_session_id = queue_item.get("session_id", self.current_session_id)
                         
                         # ✅ 优先使用 item 中的 callback
                         callback = queue_item.get("callback", self.streaming_callback)
+
+                        if self._is_version_superseded(item_version):
+                            logger.info(
+                                "[队列线程] 跳过旧版本音频: v%s text=%s...",
+                                item_version,
+                                sentence_text[:20],
+                            )
+                            continue
 
                         # ✅ 【关键】在播放音频前，推送文本到 UE5
                         # 这样可以确保字幕和音频同步
@@ -304,19 +342,34 @@ class Run_LLM_To_Anim():
             logger.info("[队列线程] 音频队列处理线程退出")
             self.queue_processor_running = False
 
-    async def process_llm_to_tts(self, prompt, llm_model,stop_event: asyncio.Event, chatname:str):
+    async def process_llm_to_tts(self, prompt, llm_model,stop_event: asyncio.Event, chatname:str, request_version=None):
         try:
             result = []
             first_request_id = None  # ✅ 保存第一个 TTS request_id
+            aborted = False
+            skip_history_on_abort = getattr(self, "skip_history_on_interrupt", True)
             
-            async for text in llm_chat.process_streaming_content(prompt,llm_model,stop_event, chatname):
+            async for text in llm_chat.process_streaming_content(
+                prompt,
+                llm_model,
+                stop_event,
+                chatname,
+                skip_history_on_abort=skip_history_on_abort,
+            ):
                 # ✅ 检查是否被打断
                 if self.stop is True:
                     logger.warning("检测到停止信号，停止 LLM-to-TTS 流程")
                     llm_chat.is_streaming_done()
                     await asyncio.sleep(0.2)
                     # ✅ 不再放入结束标记，避免与清空逻辑冲突
-                    return "".join(result), first_request_id
+                    aborted = True
+                    return "".join(result), first_request_id, aborted
+
+                if self._is_version_superseded(request_version):
+                    logger.info("[版本] LLM 流程检测到 supersede，终止: v%s", request_version)
+                    llm_chat.is_streaming_done()
+                    aborted = True
+                    return "".join(result), first_request_id, aborted
                 
                 if text:
                     # 生成 TTS 音频
@@ -349,7 +402,13 @@ class Run_LLM_To_Anim():
                     if self.stop is True:
                         logger.warning("TTS 完成后检测到停止信号，丢弃该音频")
                         llm_chat.is_streaming_done()
-                        return "".join(result), first_request_id
+                        aborted = True
+                        return "".join(result), first_request_id, aborted
+
+                    if self._is_version_superseded(request_version):
+                        logger.info("[版本] TTS 后检测到 supersede，丢弃该音频: v%s", request_version)
+                        aborted = True
+                        continue
                     
                     if audio:
                         # ✅ [新增] 立即推送句子到 UE5，而不是等待播放时
@@ -367,24 +426,30 @@ class Run_LLM_To_Anim():
                             "text": text, 
                             "audio": audio,
                             "session_id": first_request_id,
+                            "request_version": request_version,
                             "callback": self.streaming_callback  # ✅ 传递 callback
                         })
                         result.append(text)
-                        logger.info("已将句子放入 TTS 队列: %s...", text[:20])
+                        logger.info("已将句子放入 TTS 队列: %s... (v%s)", text[:20], request_version)
                     else:
                         logger.warning("call_TTS 返回空音频")
 
+            aborted = aborted or getattr(llm_chat, "last_stream_aborted", False)
+
             # ✅ 正常结束，放入结束标记
-            if not self.stop:
+            if not self.stop and not aborted and not self._is_version_superseded(request_version):
                 # 放入特殊的结束标记，携带 session_id
                 self.tts_queue.put({
                     "type": "end",
                     "session_id": first_request_id,
+                    "request_version": request_version,
                     "callback": self.streaming_callback  # ✅ 传递 callback
                 })
-                logger.info("已放入队列结束标记")
+                logger.info("已放入队列结束标记 (v%s)", request_version)
+            elif aborted:
+                logger.info("[版本] 请求已中止，跳过结束标记与后续播放: v%s", request_version)
             
-            return "".join(result), first_request_id
+            return "".join(result), first_request_id, aborted
 
         except Exception as e:
             logger.exception("Process LLM to TTS error: %s", e)
@@ -394,9 +459,9 @@ class Run_LLM_To_Anim():
                     self.tts_queue.put(None)
             except:
                 pass
-            return ""
+            return "", None, True
             
-    async def start_queue_audio(self, prompt, llm_model, stop_event: asyncio.Event, chatname:str, session_id=None, streaming_callback=None):
+    async def start_queue_audio(self, prompt, llm_model, stop_event: asyncio.Event, chatname:str, session_id=None, streaming_callback=None, request_version=None):
         """
         启动音频队列处理
         
@@ -410,6 +475,9 @@ class Run_LLM_To_Anim():
             # ✅ 保存 session_id 和回调,用于推送
             self.current_session_id = session_id
             self.streaming_callback = streaming_callback
+            with self.version_lock:
+                self.active_request_version = request_version
+            logger.info("[版本] 启动请求: v%s", request_version)
             
             # ✅ 如果有回调,初始化流式响应数据
             # if session_id and streaming_callback:
@@ -441,8 +509,14 @@ class Run_LLM_To_Anim():
                 logger.info("[启动] 当前队列状态: %s 个待处理项", self.tts_queue.qsize())
             
             # ✅ 生成 TTS（异步）
-            response, generated_session_id = await self.process_llm_to_tts(prompt, llm_model, stop_event, chatname)
-            logger.info("LLM 生成完成")
+            response, generated_session_id, aborted = await self.process_llm_to_tts(
+                prompt,
+                llm_model,
+                stop_event,
+                chatname,
+                request_version=request_version,
+            )
+            logger.info("LLM 生成完成 (v%s, aborted=%s)", request_version, aborted)
             
             # ✅ 对话完成后，自动生成记忆片段
             try:
@@ -479,6 +553,7 @@ class Run_LLM_To_Anim():
             # ✅ 清理
             self.current_session_id = None
             self.streaming_callback = None
+            self.skip_history_on_interrupt = True
             
             # ✅ 返回响应和 session_id
             return response, generated_session_id
@@ -487,6 +562,7 @@ class Run_LLM_To_Anim():
             # 清理
             self.current_session_id = None
             self.streaming_callback = None
+            self.skip_history_on_interrupt = True
             # if session_id and streaming_callback:
             #     try:
             #         streaming_callback(None, session_id, completed=True, error=str(e))

@@ -23,6 +23,7 @@ class LLMChat():
     def __init__(self):
         self.history = []
         self.on_streaming = True
+        self.last_stream_aborted = False
         # ✅ 动态加载系统提示词：从项目根目录的 config_files/sys_prompt.txt
         root_dir = resolve_path(os.path.join(os.path.dirname(__file__), "..", ".."))
         sys_prompt_path = os.path.join(root_dir, "config_files", "sys_prompt.txt")
@@ -41,7 +42,7 @@ class LLMChat():
         return not self.on_streaming
 
         
-    async def stream_llm_request(self, prompt, llm_model, stop_event: asyncio.Event, chatname:str):
+    async def stream_llm_request(self, prompt, llm_model, stop_event: asyncio.Event, chatname:str, skip_history_on_abort: bool = True):
         """llm请求函数, 需要句子处理时不调用，直接调用句子处理函数"""
         path, local_history = load_history(chatname)
         self.history = local_history
@@ -63,12 +64,14 @@ class LLMChat():
             stream=True
         )
         full_content = ""
+        aborted = False
         # 假设返回的每个 chunk 代表流式数据的一部分
         for event in completion:
-            if not self.on_streaming:
+            if stop_event.is_set() or not self.on_streaming:
                 completion = []
                 client.close()
                 self.buffer_text = ""
+                aborted = True
                 logger.info("Stop signal received, LLM client closed")
                 self.on_streaming=True
                 break
@@ -83,16 +86,34 @@ class LLMChat():
             full_content += content
             #print(f"本段收取用时 {chunk_dur}")
             last_chunk = time.time()
-        self.history.append({'role': 'assistant', 'content': full_content})
-        save_history(chatname, self.history)
+        self.last_stream_aborted = aborted
+        if not aborted:
+            self.history.append({'role': 'assistant', 'content': full_content})
+            save_history(chatname, self.history)
+        else:
+            if not skip_history_on_abort:
+                if full_content:
+                    self.history.append({'role': 'assistant', 'content': full_content})
+                    logger.info("[历史] 请求中断但保留部分历史: chat=%s", chatname)
+                else:
+                    logger.info("[历史] 请求中断无返回文本，保留用户输入: chat=%s", chatname)
+                save_history(chatname, self.history)
+            else:
+                logger.info("[历史] 请求中断，跳过保存历史: chat=%s", chatname)
 
-    async def process_streaming_content(self, prompt,llm_model, stop_event, chatname):
+    async def process_streaming_content(self, prompt,llm_model, stop_event, chatname, skip_history_on_abort: bool = True):
         self.on_streaming=True
         #请求llm并异步处理句子，每个句段收取后就进行检测#   
         result_list = []  # 用来保存符合条件的文段
         self.buffer_text = ""  # 用来拼接不符合条件的文本
         last_check = time.time()           
-        async for text in self.stream_llm_request(prompt, llm_model, stop_event, chatname):
+        async for text in self.stream_llm_request(
+            prompt,
+            llm_model,
+            stop_event,
+            chatname,
+            skip_history_on_abort=skip_history_on_abort,
+        ):
             if not text:
                 continue
             else:
