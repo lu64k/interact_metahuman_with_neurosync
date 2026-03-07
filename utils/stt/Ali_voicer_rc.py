@@ -417,11 +417,12 @@ class Callback_rc(RecognitionCallback):
             if self.last_commit_wall_ts is not None:
                 gap_from_commit_wall = time.time() - self.last_commit_wall_ts
 
-            effective_gap = gap_from_received
+            # 优先使用壁钟间隔（准确秒数），ASR 时间戳可能单位为毫秒，不可靠
+            effective_gap = gap_from_commit_wall
+            if effective_gap is None:
+                effective_gap = gap_from_received
             if effective_gap is None:
                 effective_gap = gap_from_committed
-            if effective_gap is None:
-                effective_gap = gap_from_commit_wall
 
             self.first_run = self.last_received_end_ts is None
             self.last_received_end_ts = end_ts
