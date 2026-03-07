@@ -11,7 +11,9 @@ import io
 import asyncio
 import time
 import json
+import re
 from utils.logging_config import get_logger
+from utils.llm.chat_utils import create_new_chat
 
 logger = get_logger(__name__)
 
@@ -125,6 +127,58 @@ class LLMChat():
         # 这个类将替代您的原始 LLMChat 类
 
 
+def _sanitize_file_name(name: str) -> str:
+    """Create a filesystem-safe file stem for chat history files."""
+    safe = re.sub(r'[^\w\-\u4e00-\u9fff]+', '_', (name or '').strip(), flags=re.UNICODE)
+    safe = safe.strip('_')
+    return safe or 'default'
+
+
+def ensure_chat_context(chatname: str) -> str:
+    """Ensure chat mapping, history file, and memory files exist for the chat."""
+    display_name = (chatname or 'default').strip() or 'default'
+
+    file_name = get_file_name(display_name)
+    if not file_name:
+        file_name = _sanitize_file_name(display_name)
+        ok, message = create_new_chat(display_name, file_name)
+        if ok:
+            logger.info("自动创建聊天上下文成功: %s -> %s", display_name, file_name)
+        else:
+            logger.warning("自动创建聊天上下文返回: %s", message)
+
+        # Re-fetch from source of truth after create attempt.
+        file_name = get_file_name(display_name) or file_name
+
+    # Ensure history file exists.
+    chat_path = os.path.join("dialogue_histories", f"{file_name}.txt")
+    history_path = resolve_path(chat_path)
+    os.makedirs(os.path.dirname(history_path), exist_ok=True)
+    if not os.path.exists(history_path):
+        with open(history_path, 'w', encoding='utf-8') as f:
+            json.dump([], f, ensure_ascii=False, indent=4)
+        logger.info("自动创建历史文件: %s", history_path)
+
+    # Ensure new memory file exists (fragment list format).
+    try:
+        memory_path = get_memory_file_path(display_name)
+        if not os.path.exists(memory_path):
+            with open(memory_path, 'w', encoding='utf-8') as f:
+                json.dump([], f, ensure_ascii=False, indent=4)
+            logger.info("自动创建记忆文件: %s", memory_path)
+    except Exception as e:
+        logger.warning("自动创建记忆文件失败: %s", e)
+
+    # Ensure legacy memory file exists for compatibility path.
+    legacy_memory_path = resolve_path(os.path.join("dialogue_histories", f"{file_name}_memory.json"))
+    if not os.path.exists(legacy_memory_path):
+        with open(legacy_memory_path, 'w', encoding='utf-8') as f:
+            json.dump({"summary": "", "updated_at": get_timestamp()}, f, ensure_ascii=False, indent=4)
+        logger.info("自动创建兼容记忆文件: %s", legacy_memory_path)
+
+    return file_name
+
+
 def load_history(chatname):
     """
     Load dialogue history for a given chat name
@@ -135,11 +189,8 @@ def load_history(chatname):
     Returns:
         tuple: (path, history_list)
     """
-    # ✅ 动态从 chat_list.json 获取文件名
-    file_name = get_file_name(chatname)
-    if not file_name:
-        logger.warning("未找到聊天名称: %s", chatname)
-        return "", []
+    # ✅ 动态从 chat_list.json 获取文件名（缺失时自动创建）
+    file_name = ensure_chat_context(chatname)
     
     chat_path = os.path.join("dialogue_histories", f"{file_name}.txt")
     path = resolve_path(chat_path)
@@ -182,11 +233,8 @@ def save_history(chatname, history):
     Returns:
         str: Success message
     """
-    # ✅ 动态从 chat_list.json 获取文件名
-    file_name = get_file_name(chatname)
-    if not file_name:
-        logger.error("无法保存：未找到聊天名称 %s", chatname)
-        return "error"
+    # ✅ 动态从 chat_list.json 获取文件名（缺失时自动创建）
+    file_name = ensure_chat_context(chatname)
     
     chat_path = os.path.join("dialogue_histories", f"{file_name}.txt")
     path = resolve_path(chat_path)

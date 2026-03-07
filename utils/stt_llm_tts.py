@@ -122,12 +122,18 @@ class Run_LLM_To_Anim():
         """
         logger.info("[队列线程] 启动音频队列处理线程")
         self.queue_processor_running = True
+        stop_handled = False  # 防抖：同一轮 stop=True 只处理一次
         
         try:
             while self.queue_processor_running:
                 try:
                     # ✅ 检查是否需要停止当前播放
                     if self.stop:
+                        if stop_handled:
+                            # 已处理过本轮 stop，等待新请求复位 stop=False
+                            time.sleep(0.05)
+                            continue
+
                         interrupt_seq = self.interrupt_seq
                         stop_branch_ts = time.perf_counter()
                         logger.warning("[队列线程] 收到停止信号，立即停止音频播放并清空 TTS 队列")
@@ -176,8 +182,14 @@ class Run_LLM_To_Anim():
                             self.stop,
                             self.tts_queue.qsize(),
                         )
+                        stop_handled = True
                         # ❌ 不退出，继续循环等待新队列项
                         continue
+
+                    # stop=False，允许下一轮 stop 再次触发一次性处理
+                    if stop_handled:
+                        logger.debug("[R1] stop latch released by new request")
+                        stop_handled = False
                     
                     if self.tts_queue.empty():
                         time.sleep(0.1)  # 同步等待，避免空转CPU
