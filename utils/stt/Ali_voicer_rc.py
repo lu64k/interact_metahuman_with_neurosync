@@ -1,6 +1,7 @@
 import pyaudio
 from pathlib import Path
 import time
+import json
 from dashscope.audio.asr import Recognition, RecognitionCallback, RecognitionResult
 import asyncio
 from queue import Queue
@@ -9,6 +10,39 @@ from threading import Thread
 from utils.logging_config import get_logger
 
 logger = get_logger(__name__)
+
+
+def _load_interact_config():
+    """Load interaction parameters from root config_files/interact_config.json."""
+    defaults = {
+        "wait_for_continuation_sec": 3.0,
+        "max_sentence_duration_sec": 5.0,
+        "llm_first_emit_chars": 8,
+    }
+
+    config_path = Path(__file__).resolve().parents[2] / "config_files" / "interact_config.json"
+    if not config_path.exists():
+        logger.info("[配置] 未找到 %s，使用默认交互参数", config_path)
+        return defaults
+
+    try:
+        with open(config_path, "r", encoding="utf-8") as f:
+            raw = json.load(f)
+        if not isinstance(raw, dict):
+            logger.warning("[配置] interact_config.json 不是对象，回退默认值")
+            return defaults
+
+        cfg = dict(defaults)
+        if "wait_for_continuation_sec" in raw:
+            cfg["wait_for_continuation_sec"] = float(raw["wait_for_continuation_sec"])
+        if "max_sentence_duration_sec" in raw:
+            cfg["max_sentence_duration_sec"] = float(raw["max_sentence_duration_sec"])
+        if "llm_first_emit_chars" in raw:
+            cfg["llm_first_emit_chars"] = int(raw["llm_first_emit_chars"])
+        return cfg
+    except Exception as e:
+        logger.warning("[配置] 读取 interact_config.json 失败，使用默认值: %s", e)
+        return defaults
 
 class Callback_rc(RecognitionCallback):
     def __init__(self):
@@ -27,10 +61,20 @@ class Callback_rc(RecognitionCallback):
         self.pending_paragraph = None
         self.mic = None
         self.stream = None
+
+        interact_cfg = _load_interact_config()
         # ✅ 修改：增加容差时间，允许正常停顿
         self.SILENT_TIMEOUT = 1  # 静音超时（快速连续说话的阈值）
-        self.MAX_SENTENCE_DURATION = 5  # 最大句子间隔（新对话判定）
-        self.WAIT_FOR_CONTINUATION = 3  # ⭐ 新增：等待后续句子的时间（允许正常停顿）
+        self.MAX_SENTENCE_DURATION = interact_cfg["max_sentence_duration_sec"]  # 最大句子间隔（新对话判定）
+        self.WAIT_FOR_CONTINUATION = interact_cfg["wait_for_continuation_sec"]  # 等待后续句子的时间（允许正常停顿）
+        # 仅预留配置位，当前 LLM 切句原逻辑保持不变。
+        self.LLM_FIRST_EMIT_CHARS = interact_cfg["llm_first_emit_chars"]
+        logger.info(
+            "[配置] 交互参数: wait_for_continuation=%.2fs, max_sentence_duration=%.2fs, llm_first_emit_chars=%s",
+            self.WAIT_FOR_CONTINUATION,
+            self.MAX_SENTENCE_DURATION,
+            self.LLM_FIRST_EMIT_CHARS,
+        )
         self.rc_queue = queue.Queue()
         self.new_input = None
         self.first_run = False

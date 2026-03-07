@@ -51,7 +51,39 @@ def build_gradio_app(asr_manager):
         status = gr.Textbox(label='unreal请求情况')
 
         with gr.Accordion('LLM 设置', open=False):
-            model = gr.Dropdown(choices=['grok-3', 'gpt-4o-mini', 'deepseek-chat'], label='模型', value='grok-3')
+            with gr.Row():
+                model_presets = gr.Dropdown(
+                    choices=['grok-3', 'gpt-4o-mini', 'deepseek-chat', 'gpt-4o', 'custom'], 
+                    label='预设模型', 
+                    value='grok-3'
+                )
+                model_custom = gr.Textbox(
+                    label='自定义模型名称', 
+                    placeholder='如果左侧选择 custom，请在此输入',
+                    visible=False
+                )
+            
+            # 内部逻辑判断：如果选择 custom 则显示文本框，否则隐藏并同步选择
+            model_final = gr.Textbox(value='grok-3', visible=False) # 隐藏的最终输入值
+
+            def update_model_logic(choice):
+                if choice == 'custom':
+                    return gr.update(visible=True), gr.update(value="")
+                else:
+                    return gr.update(visible=False, value=""), gr.update(value=choice)
+
+            model_presets.change(
+                update_model_logic, 
+                inputs=[model_presets], 
+                outputs=[model_custom, model_final]
+            )
+            # 自定义输入框修改时，更新最终模型
+            model_custom.input(
+                lambda x: x, 
+                inputs=[model_custom], 
+                outputs=[model_final]
+            )
+
             with gr.Row():
                 new_chat_name = gr.Textbox(label='新对话名称')
                 new_chat_filename = gr.Textbox(label='文件名')
@@ -59,12 +91,12 @@ def build_gradio_app(asr_manager):
 
         record_btn.click(
             asr_manager.record_and_recognize,
-            inputs=[gr.State(False), model, chats],
+            inputs=[gr.State(False), model_final, chats],
             outputs=[text_input, chatbot, status]
         )
         stop_btn.click(
             asr_manager.record_and_recognize,
-            inputs=[gr.State(True), model, chats],
+            inputs=[gr.State(True), model_final, chats],
             outputs=[text_input, chatbot, status]
         )
         create_chat_btn.click(

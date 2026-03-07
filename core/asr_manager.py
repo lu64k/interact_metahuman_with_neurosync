@@ -124,6 +124,11 @@ class ASRManager:
                 
                 prompt = self.rc_queue.get()
                 logger.info("新的文本生成：%s", prompt)
+
+                asr_commit_ts = getattr(self.callback_rc, "last_commit_wall_ts", None)
+                if asr_commit_ts is not None:
+                    asr_to_llm_ms = (time.time() - asr_commit_ts) * 1000
+                    logger.info("[时延] ASR->LLM 启动延迟: %.1f ms", asr_to_llm_ms)
                 
                 if not prompt or (isinstance(prompt, str) and prompt.strip() == ""):
                     logger.warning("[队列处理] 收到空 prompt，跳过处理")
@@ -145,6 +150,8 @@ class ASRManager:
                 
                 # ✅ 使用传参进来的回调函数
                 callback = self.push_sentence_callback
+
+                turn_start_ts = time.perf_counter()
                 
                 result = await self.audio_que.start_queue_audio(
                     prompt,
@@ -160,6 +167,9 @@ class ASRManager:
                     _, generated_session_id = result
                     if generated_session_id:
                         logger.info("[队列处理] 生成的 Session ID: %s", generated_session_id)
+
+                turn_total_ms = (time.perf_counter() - turn_start_ts) * 1000
+                logger.info("[时延] 单轮总时长: %.1f ms (v%s)", turn_total_ms, request_version)
                 
                 self.audio_que.current_stop_event = None
 

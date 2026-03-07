@@ -17,7 +17,17 @@ from utils.llm.chat_utils import create_new_chat
 
 logger = get_logger(__name__)
 
-
+def _load_interact_config():
+    """从根目录加载交互配置文件"""
+    try:
+        # 直接使用绝对路径确保可靠性
+        config_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "config_files", "interact_config.json"))
+        if os.path.exists(config_path):
+            with open(config_path, "r", encoding="utf-8") as f:
+                return json.load(f)
+    except Exception as e:
+        logger.error(f"加载交互配置失败: {e}")
+    return {}
 
 class LLMChat():
     def __init__(self):
@@ -42,7 +52,7 @@ class LLMChat():
         return not self.on_streaming
 
         
-    async def stream_llm_request(self, prompt, llm_model, stop_event: asyncio.Event, chatname:str, skip_history_on_abort: bool = True):
+    async def stream_llm_request(self, prompt, llm_model, stop_event: asyncio.Event, chatname:str, skip_history_on_abort = True):
         """llm请求函数, 需要句子处理时不调用，直接调用句子处理函数"""
         path, local_history = load_history(chatname)
         self.history = local_history
@@ -63,6 +73,8 @@ class LLMChat():
             messages=messages,
             stream=True
         )
+        llm_start_ts = time.perf_counter()
+        llm_first_token_ms = None
         full_content = ""
         aborted = False
         # 假设返回的每个 chunk 代表流式数据的一部分
@@ -82,6 +94,9 @@ class LLMChat():
                     continue
                     
                 content = event.choices[0].delta.content or ""
+                if content and llm_first_token_ms is None:
+                    llm_first_token_ms = (time.perf_counter() - llm_start_ts) * 1000
+                    logger.info("[时延] LLM 首 token 延迟: %.1f ms", llm_first_token_ms)
                 chunk_dur =time.time()-last_chunk
                 full_content += content
                 yield content  # 返回流式内容
@@ -96,11 +111,13 @@ class LLMChat():
             # 无论正常完成、break 中断、还是 GeneratorExit，都保存历史
             try:
                 self.last_stream_aborted = aborted
+                # 支持 callable：在 finally 时才求值，确保读到最新的 flag
+                skip_flag = skip_history_on_abort() if callable(skip_history_on_abort) else skip_history_on_abort
                 if not aborted:
                     self.history.append({'role': 'assistant', 'content': full_content})
                     save_history(chatname, self.history)
                 else:
-                    if not skip_history_on_abort:
+                    if not skip_flag:
                         if full_content:
                             self.history.append({'role': 'assistant', 'content': full_content})
                             logger.info("[历史] 请求中断但保留部分历史: chat=%s", chatname)
@@ -109,11 +126,24 @@ class LLMChat():
                         save_history(chatname, self.history)
                     else:
                         logger.info("[历史] 请求中断，跳过保存历史: chat=%s", chatname)
+
+                llm_total_ms = (time.perf_counter() - llm_start_ts) * 1000
+                first_token_log = "N/A" if llm_first_token_ms is None else f"{llm_first_token_ms:.1f}"
+                logger.info(
+                    "[时延] LLM 流式总时长: %.1f ms (first_token_ms=%s, aborted=%s)",
+                    llm_total_ms,
+                    first_token_log,
+                    aborted,
+                )
             except Exception as e:
                 logger.warning("[历史] finally 保存历史时异常: %s", e)
 
-    async def process_streaming_content(self, prompt,llm_model, stop_event, chatname, skip_history_on_abort: bool = True):
+    async def process_streaming_content(self, prompt,llm_model, stop_event, chatname, skip_history_on_abort = True):
         self.on_streaming=True
+        # 加载交互配置
+        interact_cfg = _load_interact_config()
+        first_emit_len = interact_cfg.get("llm_first_emit_chars", 8)
+        
         #请求llm并异步处理句子，每个句段收取后就进行检测#   
         result_list = []  # 用来保存符合条件的文段
         self.buffer_text = ""  # 用来拼接不符合条件的文本
@@ -136,20 +166,17 @@ class LLMChat():
 
             if time.time() - last_check >= 0:
                 cleaned_buffer = re.sub(r'\s+', '', self.buffer_text)
-                if len(cleaned_buffer) > 8 and re.search(r'[，。！？；]', self.buffer_text):
-                    #print(f"收取完整句子 {cleaned_buffer}, 长度为 {len(cleaned_buffer)}")
+                # 根据配置的阈值进行首句排放，同时确保有标点
+                if len(cleaned_buffer) >= first_emit_len and re.search(r'[，。！？；]', self.buffer_text):
                     match = re.search(r'[，。！？；]', self.buffer_text[::-1])
                     if match:
                         end_pos = len(self.buffer_text) - match.start()
                         sentence = self.buffer_text[:end_pos]
-                        if len(re.sub(r'\s+', '', sentence)) > 6:  # 前半句去空格后>8
+                        # 只要切分出的句子不是空的，就排放
+                        if len(re.sub(r'\s+', '', sentence)) > 0:
                             yield sentence
                             result_list.append(sentence)
                             self.buffer_text = self.buffer_text[end_pos:].strip()
-                        #else:
-                            #print(f"前半句长度不够8, 继续拼接")
-                    #else:
-                        #print("无标点，继续拼接下一个内容")
                     last_check = time.time()
         clean_list = process_for_tts(result_list)
         self.on_streaming=False

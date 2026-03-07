@@ -347,14 +347,15 @@ class Run_LLM_To_Anim():
             result = []
             first_request_id = None  # ✅ 保存第一个 TTS request_id
             aborted = False
-            skip_history_on_abort = getattr(self, "skip_history_on_interrupt", True)
+            llm_tts_stage_start = time.perf_counter()
+            first_tts_audio_ms = None
             
             async for text in llm_chat.process_streaming_content(
                 prompt,
                 llm_model,
                 stop_event,
                 chatname,
-                skip_history_on_abort=skip_history_on_abort,
+                skip_history_on_abort=lambda: getattr(self, "skip_history_on_interrupt", True),
             ):
                 # ✅ 检查是否被打断
                 if self.stop is True:
@@ -373,7 +374,10 @@ class Run_LLM_To_Anim():
                 
                 if text:
                     # 生成 TTS 音频
+                    tts_start_ts = time.perf_counter()
                     tts_result = await call_TTS(text)
+                    tts_latency_ms = (time.perf_counter() - tts_start_ts) * 1000
+                    logger.info("[时延] TTS 响应延迟: %.1f ms", tts_latency_ms)
                     
                     # ✅ [FIX] 检查返回值是否有效，防止解包错误
                     if not tts_result or len(tts_result) != 2:
@@ -411,6 +415,9 @@ class Run_LLM_To_Anim():
                         continue
                     
                     if audio:
+                        if first_tts_audio_ms is None:
+                            first_tts_audio_ms = (time.perf_counter() - llm_tts_stage_start) * 1000
+                            logger.info("[时延] 首段 TTS 音频就绪: %.1f ms", first_tts_audio_ms)
                         # ✅ [新增] 立即推送句子到 UE5，而不是等待播放时
                         # 这样 UE5 可以立刻收到文本，无需等待音频队列
                         # if self.streaming_callback:
@@ -448,6 +455,16 @@ class Run_LLM_To_Anim():
                 logger.info("已放入队列结束标记 (v%s)", request_version)
             elif aborted:
                 logger.info("[版本] 请求已中止，跳过结束标记与后续播放: v%s", request_version)
+
+            llm_tts_total_ms = (time.perf_counter() - llm_tts_stage_start) * 1000
+            first_tts_log = "N/A" if first_tts_audio_ms is None else f"{first_tts_audio_ms:.1f}"
+            logger.info(
+                "[时延] LLM->TTS 阶段总时长: %.1f ms (first_tts_audio_ms=%s, aborted=%s, v%s)",
+                llm_tts_total_ms,
+                first_tts_log,
+                aborted,
+                request_version,
+            )
             
             return "".join(result), first_request_id, aborted
 

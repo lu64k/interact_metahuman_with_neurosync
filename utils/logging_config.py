@@ -10,6 +10,26 @@ DEFAULT_LOG_FORMAT = (
 )
 
 
+class _ConsoleNoiseFilter(logging.Filter):
+    """Reduce noisy logs in terminal while keeping full file logs."""
+
+    _logger_name = "utils.stt.Ali_voicer_rc"
+    _message_prefixes = (
+        "[聚合]",
+        "[时间基准]",
+        "收到完整句子:",
+    )
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if record.name != self._logger_name:
+            return True
+        message = record.getMessage()
+        for prefix in self._message_prefixes:
+            if message.startswith(prefix):
+                return False
+        return True
+
+
 def setup_logging(
     level: int = logging.INFO,
     log_dir: str = "logs",
@@ -35,6 +55,7 @@ def setup_logging(
     console_handler = logging.StreamHandler(sys.stdout)
     console_handler.setLevel(level)
     console_handler.setFormatter(formatter)
+    console_handler.addFilter(_ConsoleNoiseFilter())
 
     file_handler = RotatingFileHandler(
         filename=str(full_log_path),
