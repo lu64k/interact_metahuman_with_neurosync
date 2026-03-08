@@ -23,7 +23,7 @@ class PyLiveLinkFace:
         self._filter_size = filter_size
         self._version = 6
 
-        self._scaling_factor_mouth = 0.6
+        self._scaling_factor_mouth = 0.8
         self._scaling_factor_eyes = 1.0
         self._scaling_factor_eyebrows = 0.5
         self._scaling_factor_eyewide_left = 0.4

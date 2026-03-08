@@ -16,7 +16,7 @@ utils_local_api/model/model.pth
 
 # user data
 utils/llm/dialogue_histories/
-
+voice_tools/
 
 # Other
 .vscode/

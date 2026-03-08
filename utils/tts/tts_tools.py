@@ -76,7 +76,11 @@ def synthesize_speech_cosy_cove_streaming(text):
         synthesizer.streaming_complete()
     return ("finished")
 halsin = "cosyvoice-v2-halsin-cb27968ead8241b7acd9941b86a37d53"
-cove = "cosyvoice-v2-prefix-8165fbaef5b34306bbf6d1edcf3ed705"        
+cove = "cosyvoice-v2-prefix-8165fbaef5b34306bbf6d1edcf3ed705" #推荐语速1.2-1.3
+henry = "cosyvoice-v3.5-plus-henry-2c9e9ac9bb7c443a934a46aef36d69ab" 
+henry_flash = "cosyvoice-v3.5-flash-henry-8561249abf224db3b195f8399ff69fac"       
+henry_v2 = "cosyvoice-v2-henry2-2681c1bf3d51401fa8bb8bd7c2569fdf" 
+henry_v3 = "cosyvoice-v3-plus-henry-a833a4c8ff814446bcc82ca432410fb5" 
 from flask import current_app
 app = Flask(__name__)  
 dashscope.api_key = init_api_key(env_name= 'DASHSCOPE_API_KEY', input_api_key="输入你的api")
@@ -86,9 +90,9 @@ async def synthesize_speech(text):
     try:
         # 使用 Dashscope TTS v2 进行语音合成
         model = "cosyvoice-v2"  # 替换为您使用的模型名称
-        voice = cove  # 替换为您选择的语音名称
+        voice = cove # 为您选择的语音名称
         format = AudioFormat.PCM_22050HZ_MONO_16BIT
-        speech_rate = 1.30
+        speech_rate = 1.2  # 可选：调整语速，默认为 1.0
         synthesizer = SpeechSynthesizer(model=model, voice=voice, format=format, speech_rate=speech_rate)
         audio = await asyncio.to_thread (synthesizer.call,text)
         

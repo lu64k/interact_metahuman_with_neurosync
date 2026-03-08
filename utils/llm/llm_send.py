@@ -166,9 +166,9 @@ class LLMChat():
 
             if time.time() - last_check >= 0:
                 cleaned_buffer = re.sub(r'\s+', '', self.buffer_text)
-                # 根据配置的阈值进行首句排放，同时确保有标点
-                if len(cleaned_buffer) >= first_emit_len and re.search(r'[，。！？；]', self.buffer_text):
-                    match = re.search(r'[，。！？；]', self.buffer_text[::-1])
+                # 优化：支持中、英文常见标点断句 [，。！？；,.!?]
+                if len(cleaned_buffer) >= first_emit_len and re.search(r'[，。！？；,.!?]', self.buffer_text):
+                    match = re.search(r'[，。！？；,.!?]', self.buffer_text[::-1])
                     if match:
                         end_pos = len(self.buffer_text) - match.start()
                         sentence = self.buffer_text[:end_pos]
@@ -177,6 +177,12 @@ class LLMChat():
                             yield sentence
                             result_list.append(sentence)
                             self.buffer_text = self.buffer_text[end_pos:].strip()
+                    last_check = time.time()
+                # 兜底：如果积压文本过长（如 > 30 字）且一直没标点，强制排放以保证响应
+                elif len(cleaned_buffer) > 30:
+                    yield self.buffer_text
+                    result_list.append(self.buffer_text)
+                    self.buffer_text = ""
                     last_check = time.time()
         clean_list = process_for_tts(result_list)
         self.on_streaming=False
