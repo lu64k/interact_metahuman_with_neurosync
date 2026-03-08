@@ -1,5 +1,5 @@
 
-Note: This is an extended fork of the original NeuroSync Player + NeuroSync Local API which can be found at https://github.com/AnimaVR. All code in this repository falls under the original NeuroSync license.
+Note: This is an extended fork of the original NeuroSync Player + NeuroSync Local API from https://github.com/AnimaVR. Code in this repository follows the original NeuroSync license terms.
 
 # Interact MetaHuman with NeuroSync
 
@@ -9,91 +9,131 @@ Note: This is an extended fork of the original NeuroSync Player + NeuroSync Loca
 
 ## English Version
 
-This is a real-time MetaHuman interaction system for Unreal Engine 5 (UE5). It integrates Automatic Speech Recognition (ASR), Large Language Models (LLM), and Text-to-Speech (TTS) to achieve audio-driven high-fidelity lip-sync via LiveLink.
+Real-time MetaHuman interaction system for Unreal Engine 5 (UE5), integrating ASR + LLM + TTS and driving facial animation to UE via LiveLink.
 
-### 🌟 Key Features
-- **Real-time Conversation Pipeline**: Supports the complete flow from voice input to MetaHuman response, with an end-to-end latency of ~7 seconds.
-- **High-Fidelity Lip-Sync**: Sends 61-dimensional blendshape parameters to UE5 via the LiveLink protocol.
-- **Event-Driven Interruption**: Supports real-time interruption during speech via new voice input (using Cooperative Cancellation).
-- **Multi-Model Switching**: Gradio UI supports switching between different LLMs (e.g., Grok-3, GPT-4o).
+### Features
+- Real-time voice conversation pipeline (speech in -> LLM -> speech out -> avatar animation)
+- LiveLink-based lip sync (61-dim blendshape stream)
+- Event-driven interruption during speaking turns (cooperative cancellation)
+- Gradio model switching for different LLM backends
 
-### 🛠️ Technical Architecture
-- **ASR/TTS**: Alibaba DashScope (Paraformer / CosyVoice)
-- **LLM**: OpenAI API compatible architecture
-- **Concurrency**: Hybrid scheduling with Asyncio event loops and multi-threading
-- **Animation Drive**: LiveLink UDP Protocol (60 FPS)
+### Tech Stack
+- ASR/TTS: Alibaba DashScope (Paraformer / CosyVoice)
+- LLM: OpenAI-compatible API providers
+- Runtime: Asyncio + threading hybrid pipeline
+- Animation transport: LiveLink UDP (target 60 FPS)
 
-### 🚀 Quick Start
+### Requirements
+- OS: Windows (primary tested)
+- Python: 3.11 recommended
+- GPU (optional but recommended): CUDA 11.8-compatible setup for PyTorch workloads
+- Unreal Engine 5 with LiveLink receiver configured
 
-#### 1. Environment Setup
-Python 3.11 is recommended. Install the required dependencies:
+### Quick Start
+1. Install dependencies.
+
 ```bash
 pip install -r requirements.txt
-# Install PyTorch for CUDA 11.8 (Example):
+```
+
+2. Install PyTorch matching your CUDA version (example for CUDA 11.8).
+
+```bash
 pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
 ```
 
-#### 2. Configure API Keys
-Set the following keys in your environment variables or `config.py`:
-- `DASHSCOPE_API_KEY`: Alibaba DashScope
-- `OPENAI_API_KEY`: LLM Provider
+3. Configure credentials and runtime settings.
+- API keys: `DASHSCOPE_API_KEY`, `OPENAI_API_KEY`
+- Main config files: `config.py`, `config_files/interact_config.json`
 
-#### 3. Run Project
-Start the main program and connect to the UE5 LiveLink port:
+4. Run the project.
+
 ```bash
 python run_audio2unrealV1.3.py
 ```
 
-#### 📂 Project Structure
-- `api/`: Gradio UI and Flask services
-- `core/`: System Core Manager (ASR Manager)
-- `livelink/`: UE5 animation drive logic
-- `utils/`: LLM/TTS tuning and audio processing utilities
+Optional Windows launcher:
+
+```bash
+Start_Base_V1.3.bat
+```
+
+### Project Layout
+- `api/`: Flask + Gradio entry points
+- `core/`: ASR manager and orchestration
+- `livelink/`: UE animation streaming
+- `utils/`: STT/LLM/TTS/audio utility modules
+- `utils_local_api/`: local inference support code
+
+### Troubleshooting
+- If no audio response is produced, verify API keys and check `logs/`.
+- If UE lip sync is weak, inspect mouth scaling in `livelink/connect/pylivelinkface.py`.
+- If interruption feels delayed, tune ASR sentence emit behavior in `utils/stt/Ali_voicer_rc.py`.
 
 ---
 
 ## 中文版本
 
-这是一个基于 Unreal Engine 5 (UE5) 的实时虚幻人交互系统，集成了语音识别 (ASR)、大语言模型 (LLM) 和语音合成 (TTS)，通过 LiveLink 实现音频驱动的高保真口型同步。
+这是一个面向 Unreal Engine 5 (UE5) 的实时 MetaHuman 交互系统，集成 ASR + LLM + TTS，并通过 LiveLink 把口型动画实时驱动到 UE。
 
-## 🌟 核心功能
-- **实时对话链路**：支持从语音输入到 MetaHuman 响应的全流程，端到端延迟约 7 秒。
-- **高保真口型同步**：通过 LiveLink 协议向 UE5 发送 61 维混合变形参数。
-- **事件驱动打断**：支持在 MetaHuman 说话时通过新语音输入进行实时打断（Cooperative Cancellation）。
-- **多模型切换**：Gradio 界面支持切换不同的 LLM（如 Grok-3, GPT-4o 等）。
+## 核心功能
+- 实时语音对话链路（语音输入 -> LLM -> 语音输出 -> 角色动画）
+- 基于 LiveLink 的口型同步（61 维 blendshape 流）
+- 说话过程中可打断（协作式取消机制）
+- Gradio 前端支持多 LLM 模型切换
 
-## 🛠️ 技术架构
-- **ASR/TTS**: 阿里云 DashScope (Paraformer / CosyVoice)
-- **LLM**: OpenAI API 兼容架构
-- **并发模型**: Asyncio 事件循环与多线程混合调度
-- **动画驱动**: LiveLink UDP 协议 (60FPS)
+## 技术栈
+- ASR/TTS：阿里云 DashScope (Paraformer / CosyVoice)
+- LLM：OpenAI 兼容接口
+- 运行时：Asyncio + 多线程混合并发
+- 动画传输：LiveLink UDP（目标 60 FPS）
 
-## 🚀 快速开始
+## 环境要求
+- 操作系统：Windows（主要测试平台）
+- Python：建议 3.11
+- GPU（可选但推荐）：按 CUDA 版本安装对应 PyTorch
+- UE5：需配置 LiveLink 接收端
 
-### 1. 环境准备
-推荐使用 Python 3.11 并安装依赖：
+## 快速开始
+1. 安装依赖。
+
 ```bash
 pip install -r requirements.txt
-# 针对 CUDA 11.8 安装 PyTorch (示例):
+```
+
+2. 安装匹配 CUDA 的 PyTorch（以下为 CUDA 11.8 示例）。
+
+```bash
 pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
 ```
 
-### 2. 配置 API Key
-在环境变量或 `config.py` 中配置：
-- `DASHSCOPE_API_KEY`: 阿里云百炼
-- `OPENAI_API_KEY`: LLM 提供商
+3. 配置密钥与运行参数。
+- API Key：`DASHSCOPE_API_KEY`、`OPENAI_API_KEY`
+- 主要配置文件：`config.py`、`config_files/interact_config.json`
 
-### 3. 运行项目
-启动主程序并连接 UE5 的 LiveLink 端口：
+4. 启动项目。
+
 ```bash
 python run_audio2unrealV1.3.py
 ```
 
-## 📂 项目结构
-- `api/`: Gradio UI 与 Flask 服务
-- `core/`: 系统核心管理器 (ASR Manager)
-- `livelink/`: UE5 动画驱动逻辑
-- `utils/`: LLM、TTS 调优与音频处理工具包
+Windows 下也可用：
 
-## 📄 开源协议
-[MIT LICENSE](LICENCE)
+```bash
+Start_Base_V1.3.bat
+```
+
+## 项目结构
+- `api/`：Flask 与 Gradio 入口
+- `core/`：ASR 管理与主流程编排
+- `livelink/`：UE 动画数据发送
+- `utils/`：STT/LLM/TTS/音频工具模块
+- `utils_local_api/`：本地推理相关模块
+
+## 常见问题
+- 没有语音输出：先检查 API Key，再查看 `logs/`。
+- 口型幅度偏小：检查 `livelink/connect/pylivelinkface.py` 的嘴部缩放参数。
+- 打断偏慢：可调 `utils/stt/Ali_voicer_rc.py` 中的句子触发策略。
+
+## License
+[LICENCE](LICENCE)
