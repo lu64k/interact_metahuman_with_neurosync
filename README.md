@@ -87,6 +87,7 @@ Start_Base_V1.3.bat
 ### Roadmap
 1. Standardize and expose key runtime parameters across API input, ASR, TTS, and animation modules.
 2. Improve support and debugging workflow for interruption during long-sentence generation/playback.
+3. Explore support for native multimodal model workflows by adding an audio-to-audio streaming path to fundamentally reduce end-to-end latency.
 
 ---
 
@@ -171,6 +172,7 @@ Start_Base_V1.3.bat
 ## 未来计划
 1. 标准化并暴露关键运行参数：覆盖 API 输入、ASR、TTS、Animation 等模块。
 2. 加强长句子场景下的打断支持与调试能力。
+3. 考虑引入对原生多模态模型流程的支持，增加audio2audio传输流，进一步根本上降低延迟
 
 ## License
 [LICENCE](LICENCE)
