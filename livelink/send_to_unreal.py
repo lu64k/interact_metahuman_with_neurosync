@@ -5,6 +5,7 @@
 
 import time
 from typing import List
+from utils.logging_config import get_logger
 
 from livelink.connect.livelink_init import create_socket_connection, FaceBlendShape
 from livelink.animations.default_animation import default_animation_data
@@ -14,6 +15,8 @@ from livelink.animations.blending_anims import (
     FAST_BLENDSHAPES,
     default_animation_state,
 )
+
+logger = get_logger(__name__)
 
 def pre_encode_facial_data(facial_data: list, py_face, fps: int = 60, smooth: bool = False) -> list:
     """
@@ -60,7 +63,7 @@ def pre_encode_facial_data(facial_data: list, py_face, fps: int = 60, smooth: bo
     #    print(f"处理blend_in帧, 长度: {len(frame)}")
         for i in range(51):
             if i >= len(frame):
-                print(f"索引越界! blend_in_frames帧索引: {i}, 帧长度: {len(frame)}")
+                logger.error("索引越界! blend_in_frames帧索引: %s, 帧长度: %s", i, len(frame))
                 raise IndexError(f"blend_in_frames索引越界: {i}")
             py_face.set_blendshape(FaceBlendShape(i), frame[i])
         encoded_data.append(py_face.encode())
@@ -102,7 +105,7 @@ def pre_encode_facial_data(facial_data: list, py_face, fps: int = 60, smooth: bo
 #        print(f"处理blend_out帧, 长度: {len(frame)}")
         for i in range(51):
             if i >= len(frame):
-                print(f"索引越界! blend_out_frames帧索引: {i}, 帧长度: {len(frame)}")
+                logger.error("索引越界! blend_out_frames帧索引: %s, 帧长度: %s", i, len(frame))
                 raise IndexError(f"blend_out_frames索引越界: {i}")
             py_face.set_blendshape(FaceBlendShape(i), frame[i])
         encoded_data.append(py_face.encode())
@@ -139,7 +142,13 @@ def smooth_facial_data(facial_data: list) -> list:
     return smoothed_data
 
 
-def send_pre_encoded_data_to_unreal(encoded_facial_data: List[bytes], start_event, fps: int, socket_connection=None):
+def send_pre_encoded_data_to_unreal(encoded_facial_data: List[bytes], start_event, fps: int, socket_connection=None, stop_flag_getter=None):
+    """
+    发送预编码的面部数据到 Unreal
+    
+    Args:
+        stop_flag_getter: Optional callable that returns True if playback should be interrupted
+    """
     try:
         own_socket = False
         if socket_connection is None:
@@ -151,6 +160,11 @@ def send_pre_encoded_data_to_unreal(encoded_facial_data: List[bytes], start_even
         start_time = time.time()  
 
         for frame_index, frame_data in enumerate(encoded_facial_data):
+            # ✅ 检查打断标志
+            if stop_flag_getter and stop_flag_getter():
+                logger.warning("[动画线程] 检测到打断信号，停止发送动画数据")
+                break
+            
             current_time = time.time()
             elapsed_time = current_time - start_time
             expected_time = frame_index * frame_duration 

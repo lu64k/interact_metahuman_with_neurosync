@@ -1,0 +1,5 @@
+{
+  "wait_for_continuation_sec": 0.5,
+  "max_sentence_duration_sec": 3.0,
+  "llm_first_emit_chars": 8
+}

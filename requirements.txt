@@ -1,0 +1,39 @@
+# Core Framework
+gradio==5.29.1
+Flask==2.2.5
+fastapi==0.115.12
+pydantic>=2.10.6
+python-dotenv
+
+# AI & LLM
+dashscope
+openai
+huggingface-hub==0.29.1
+diffusers==0.32.2
+einops==0.8.1
+face-alignment==1.3.6
+
+# Audio Processing
+librosa
+pyaudio
+sounddevice
+audioread==3.0.1
+ffmpy==0.5.0
+
+# Data & Math
+numpy>=1.26.0
+pandas>=2.1.4
+scipy
+
+# Utilities
+requests
+httpx==0.27.2
+aiohttp==3.9.3
+anyio==4.2.0
+uuid
+colorama
+humanfriendly
+
+# Hardware Acceleration
+# torch, torchvision, torchaudio should be installed according to your CUDA version (e.g., 11.8)
+# pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118

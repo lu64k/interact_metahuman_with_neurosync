@@ -9,9 +9,11 @@ It also supports audio conversion on the fly (e.g. raw PCM to WAV) where needed.
 import io
 import time
 import pygame
+from utils.logging_config import get_logger
 from utils.audio.convert_audio import convert_to_wav
 from pydub import AudioSegment
 AudioSegment.ffmpeg = "path/to/ffmpeg"
+logger = get_logger(__name__)
 # --- Helper Functions ---
 
 def init_pygame_mixer():
@@ -40,13 +42,26 @@ def sync_playback_loop():
         clock.tick(10)
 
 
-def simple_playback_loop():
+def simple_playback_loop(stop_flag_getter=None):
     """
     A simple playback loop that just ticks the clock until playback finishes.
+    
+    Args:
+        stop_flag_getter: Optional callable that returns True if playback should be interrupted
     """
     clock = pygame.time.Clock()
     while pygame.mixer.music.get_busy():
+        # ✅ 检查是否需要打断
+        if stop_flag_getter and stop_flag_getter():
+            logger.warning("[播放中断] 检测到打断信号，立即停止音频")
+            pygame.mixer.music.stop()
+            break
         clock.tick(10)
+    
+    # ✅ 确保音频完全停止后再返回
+    # 有时候 get_busy() 返回 False 但音频缓冲区还没完全清空
+    # 增加一个小延迟确保下一句不会重叠
+    time.sleep(0.1)
 
 
 # --- Playback Functions ---
@@ -71,13 +86,19 @@ def play_audio_bytes(audio_bytes, start_event, sync=True):
         else:
             simple_playback_loop()
     except pygame.error as e:
-        print(f"Error in play_audio_bytes: {e}")
+        logger.exception("Error in play_audio_bytes: %s", e)
 
 
-def play_audio_from_memory(audio_data, start_event, sync=False):
+def play_audio_from_memory(audio_data, start_event, sync=False, stop_flag_getter=None):
     """
     Play audio from memory (assumes valid WAV bytes).
     Uses a simple playback loop.
+    
+    Args:
+        audio_data: Audio bytes in WAV format
+        start_event: Event to wait for before starting playback
+        sync: Whether to use sync playback (default False)
+        stop_flag_getter: Optional callable that returns True if playback should be interrupted
     """
     try:
         init_pygame_mixer()
@@ -85,14 +106,14 @@ def play_audio_from_memory(audio_data, start_event, sync=False):
         pygame.mixer.music.load(audio_file)
         start_event.wait()
         pygame.mixer.music.play()
-        simple_playback_loop()
+        simple_playback_loop(stop_flag_getter)
     except pygame.error as e:
         if "Unknown WAVE format" in str(e):
-            print("Unknown WAVE format encountered. Skipping to the next item in the queue.")
+            logger.warning("Unknown WAVE format encountered. Skipping to the next item in the queue.")
         else:
-            print(f"Error in play_audio_from_memory: {e}")
+            logger.exception("Error in play_audio_from_memory: %s", e)
     except Exception as e:
-        print(f"Error in play_audio_from_memory: {e}")
+        logger.exception("Error in play_audio_from_memory: %s", e)
 
 
 def play_audio_from_path(audio_path, start_event, sync=True):
@@ -105,7 +126,7 @@ def play_audio_from_path(audio_path, start_event, sync=True):
         try:
             pygame.mixer.music.load(audio_path)
         except pygame.error:
-            print(f"Unsupported format for {audio_path}. Converting to WAV.")
+            logger.warning("Unsupported format for %s. Converting to WAV.", audio_path)
             audio_path = convert_to_wav(audio_path)
             pygame.mixer.music.load(audio_path)
         start_event.wait()
@@ -115,7 +136,7 @@ def play_audio_from_path(audio_path, start_event, sync=True):
         else:
             simple_playback_loop()
     except pygame.error as e:
-        print(f"Error in play_audio_from_path: {e}")
+        logger.exception("Error in play_audio_from_path: %s", e)
 
 
 def read_audio_file_as_bytes(file_path):
@@ -124,16 +145,16 @@ def read_audio_file_as_bytes(file_path):
     Only WAV files are supported.
     """
     if not file_path.lower().endswith('.wav'):
-        print(f"Unsupported file format: {file_path}. Only WAV files are supported.")
+        logger.warning("Unsupported file format: %s. Only WAV files are supported.", file_path)
         return None
     try:
         with open(file_path, 'rb') as f:
             return f.read()
     except FileNotFoundError:
-        print(f"File not found: {file_path}")
+        logger.error("File not found: %s", file_path)
         return None
     except Exception as e:
-        print(f"Error reading audio file: {e}")
+        logger.exception("Error reading audio file: %s", e)
         return None
     
     

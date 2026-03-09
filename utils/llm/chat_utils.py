@@ -5,6 +5,8 @@
 
 import os
 import json
+from utils.llm.text_utils import resolve_path
+from utils.llm.chat_list_manager import get_all_chat_names, add_chat
 
 # -------------------------------------------------------------------
 # Existing configuration and functions
@@ -196,4 +198,25 @@ def save_chat_log_ai(ai_id, chat_history):
         total_length = sum(len(json.dumps(entry)) for entry in chat_history)
     with open(log_file, "w", encoding="utf-8") as f:
         json.dump(chat_history, f, indent=4)
+
+
+def create_new_chat(display_name, file_name):
+    """Create a new chat history file and register it in chat_list.json."""
+    if not display_name or not file_name:
+        return False, "display_name and file_name are required"
+
+    if display_name in get_all_chat_names():
+        return False, f"Chat '{display_name}' already exists"
+
+    chat_path = os.path.join("dialogue_histories", f"{file_name}.txt")
+    path = resolve_path(chat_path)
+
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump([], f, ensure_ascii=False, indent=4)
+
+    success = add_chat(display_name, file_name)
+    if success:
+        return True, f"Successfully created chat: {display_name}"
+    return False, "Failed to add chat to chat_list.json"
 

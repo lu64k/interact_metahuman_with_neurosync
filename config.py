@@ -1,6 +1,26 @@
 # config.py
 import os
+#===================CONFIG_SETTING====================#
 
+#stt_config
+stt_url = 'your stt servece url'#if you didnt setup in the environment path
+stt_key = 'your stt servece key'#if you didnt setup in the environment path
+Rec_model='paraformer-realtime-v2'
+rec_format='pcm'
+rec_sample_rate=16000 
+heartbeat=True #make sure your recornization serveces contain this config
+
+#llm_config
+remote_llm_url = 'your llm servece url'#if you didnt setup in the environment path
+remote_stt_key = 'your llm servece key'#if you didnt setup in the environment path
+remote_llm_model='gpt-4o-mini'
+llm_temperature = 0.8
+system_prompt_path = 'path to your systempromtps' # config_files/sys_prompt.txt by defult
+
+#tts_config
+
+
+#===================ORIGINAL_NEUROSYNC_CONFIG===================#
 USE_LOCAL_LLM = True
 USE_STREAMING = True
 LLM_API_URL = "http://127.0.0.1:5050/generate_llama"
